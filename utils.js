@@ -53,43 +53,13 @@ const getSafeAddress = (address) => {
     }
 };
 
-const getGasParams = async (provider) => {
-    // Minimum gas prices (your specified values)
-    const MIN_BASE_FEE = ethers.parseUnits("1.71755288", "gwei");
-    const MIN_PRIORITY_FEE = ethers.parseUnits("1.5", "gwei");
-    
-    try {
-        const feeData = await provider.getFeeData();
-        
-        // Get base fee and priority fee from network or use minimums
-        const baseFee = feeData.gasPrice || feeData.maxFeePerGas || MIN_BASE_FEE;
-        const priorityFee = feeData.maxPriorityFeePerGas || MIN_PRIORITY_FEE;
-
-        // Calculate maxPriorityFeePerGas with buffer (max 50% increase)
-        let maxPriorityFeePerGas = (priorityFee * 150n) / 100n;
-        
-        // Calculate maxFeePerGas (base + priority with buffer)
-        let maxFeePerGas = (baseFee * 120n) / 100n + maxPriorityFeePerGas;
-
-        // Ensure maxFeePerGas is always greater than maxPriorityFeePerGas
-        if (maxPriorityFeePerGas >= maxFeePerGas) {
-            maxFeePerGas = (maxPriorityFeePerGas * 110n) / 100n; // Add 10% buffer
-        }
-
-        return {
-            maxFeePerGas,
-            maxPriorityFeePerGas,
-            gasLimit: GAS_SETTINGS.defaultGasLimit
-        };
-    } catch (error) {
-        console.warn('Using enforced minimum gas prices after fee data failure:', error);
-        // Fallback with guaranteed valid relationship
-        return {
-            maxFeePerGas: (MIN_BASE_FEE * 120n) / 100n + MIN_PRIORITY_FEE,
-            maxPriorityFeePerGas: MIN_PRIORITY_FEE,
-            gasLimit: GAS_SETTINGS.defaultGasLimit
-        };
-    }
+const getGasParams = async () => {
+    // Hardcoded to your exact requested values
+    return {
+        maxFeePerGas: ethers.parseUnits("2.5", "gwei"),  // Fixed 2.5 Gwei
+        maxPriorityFeePerGas: ethers.parseUnits("2", "gwei"),  // Fixed 2 Gwei
+        gasLimit: GAS_SETTINGS.defaultGasLimit
+    };
 };
 
 const withRetry = async (fn, operation = 'operation') => {
@@ -118,7 +88,7 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
 
             const provider = await getProvider(sourceChain);
             const wallet = new ethers.Wallet(privateKey, provider);
-            const gasParams = await getGasParams(provider);
+            const gasParams = await getGasParams();
 
             // Log the actual gas parameters being used
             console.log('Gas parameters:', {
