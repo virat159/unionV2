@@ -1,7 +1,6 @@
 import { ethers } from 'ethers';
 import { CHAINS, RPC_URLS, UNION_CONTRACT, TOKENS } from './config.js';
 
-// Cache providers for better performance
 const providerCache = new Map();
 
 export const getProvider = (chainId) => {
@@ -11,27 +10,35 @@ export const getProvider = (chainId) => {
   return providerCache.get(chainId);
 };
 
+// Helper to safely get address
+const getSafeAddress = (address) => {
+  try {
+    return ethers.getAddress(address.toLowerCase());
+  } catch {
+    return address.toLowerCase(); // Fallback to lowercase if checksum fails
+  }
+};
+
 export const sendToken = async ({ sourceChain, destChain, asset, amount, privateKey }) => {
   try {
-    // Validate input parameters
+    // Validate chains
     if (!CHAINS[sourceChain] || !CHAINS[destChain]) {
-      throw new Error(`Invalid chain specified: ${sourceChain} → ${destChain}`);
+      throw new Error(`Invalid chain: ${sourceChain} → ${destChain}`);
     }
 
     const provider = getProvider(sourceChain);
     const wallet = new ethers.Wallet(privateKey, provider);
 
-    // Normalize and validate bridge address
-    const bridgeAddress = ethers.getAddress(UNION_CONTRACT[sourceChain]);
+    // Get and validate bridge address
+    const bridgeAddress = getSafeAddress(UNION_CONTRACT[sourceChain]);
     if (!bridgeAddress) {
       throw new Error(`Missing bridge address for ${sourceChain}`);
     }
 
     // Normalize token address
-    const tokenAddress = ethers.getAddress(asset);
-    const isWETH = tokenAddress === ethers.getAddress(TOKENS.WETH[sourceChain]);
+    const tokenAddress = getSafeAddress(asset);
+    const isWETH = tokenAddress === getSafeAddress(TOKENS.WETH[sourceChain]);
 
-    // For WETH transfers
     if (isWETH) {
       const erc20 = new ethers.Contract(
         tokenAddress,
@@ -43,7 +50,6 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
         wallet
       );
 
-      // Check balance and existing allowance
       const [balance, allowance] = await Promise.all([
         erc20.balanceOf(wallet.address),
         erc20.allowance(wallet.address, bridgeAddress)
@@ -55,35 +61,30 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
         throw new Error(`Insufficient WETH. Need ${amount}, has ${ethers.formatEther(balance)}`);
       }
 
-      // Only approve if needed
       if (allowance < parsedAmount) {
         console.log('⏳ Approving WETH transfer...');
         const approveTx = await erc20.approve(bridgeAddress, parsedAmount);
         await approveTx.wait();
       }
 
-      // Execute bridge transfer with retry logic
+      console.log('⏳ Bridging WETH...');
       const bridge = new ethers.Contract(
         bridgeAddress,
-        [
-          'function depositERC20(address token, uint256 amount, uint16 destChainId)'
-        ],
+        ['function depositERC20(address token, uint256 amount, uint16 destChainId)'],
         wallet
       );
 
-      console.log('⏳ Bridging WETH...');
       const tx = await bridge.depositERC20(
         tokenAddress,
         parsedAmount,
         CHAINS[destChain],
-        { gasLimit: 300000 } // Increased gas limit
+        { gasLimit: 300000 }
       );
 
-      console.log(`ℹ️ Gas used: ${tx.gasLimit.toString()}`);
       return tx.hash;
     }
 
-    // For other ERC20 tokens
+    // Handle other ERC20 tokens
     const contract = new ethers.Contract(
       tokenAddress,
       [
@@ -93,17 +94,12 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
       wallet
     );
 
-    // Dynamic decimals detection
-    let decimals = 18;
-    try {
-      decimals = await contract.decimals();
-    } catch (e) {
-      console.log('⚠️ Using default decimals (18)');
-    }
+    const decimals = await contract.decimals().catch(() => 18);
+    const tx = await contract.transfer(
+      bridgeAddress,
+      ethers.parseUnits(amount.toString(), decimals)
+    );
 
-    const parsedAmount = ethers.parseUnits(amount.toString(), decimals);
-    const tx = await contract.transfer(bridgeAddress, parsedAmount);
-    
     return tx.hash;
 
   } catch (error) {
@@ -114,7 +110,6 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
       amount,
       reason: error.reason || error.message,
       code: error.code,
-      method: error.method,
       stack: error.stack
     });
     throw error;
