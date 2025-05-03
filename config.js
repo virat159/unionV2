@@ -17,7 +17,7 @@ export const UNION_CONTRACT = {
 export const RPC_URLS = {
   HOLESKY: 'https://rpc.holesky.ethpandaops.io',
   SEPOLIA: 'https://rpc.sepolia.org',
-  XION: 'https://xion-testnet-rpc.polkachu.com',
+  XION: 'https://rpc.xion-testnet-2.burnt.com:443',
   CORN: 'https://rpc.ankr.com/corn_testnet',
 };
 
