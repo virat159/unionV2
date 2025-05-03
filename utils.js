@@ -1,46 +1,71 @@
 import { ethers } from 'ethers';
-import { CHAINS, RPC_URLS, UNION_CONTRACT, TOKENS } from './config.js';
+import { CHAINS, RPC_URLS, RPC_FALLBACKS, UNION_CONTRACT, TOKENS, GAS_SETTINGS, RPC_TIMEOUTS } from './config.js';
 
 const providerCache = new Map();
 
 export const getProvider = (chainId) => {
   if (!providerCache.has(chainId)) {
-    const rpcUrls = Array.isArray(RPC_URLS[chainId]) ? RPC_URLS[chainId] : [RPC_URLS[chainId]];
-    
-    // Create network configuration
-    const network = {
-      chainId: CHAINS[chainId],
-      name: chainId.toLowerCase().replace(/-/g, '_')
-    };
-
-    // Create provider instances
-    const providers = rpcUrls.map(url => {
-      try {
-        return new ethers.JsonRpcProvider(url, network, {
+    // First try primary RPC
+    try {
+      const network = {
+        chainId: Number(CHAINS[chainId]),
+        name: chainId.toLowerCase()
+      };
+      
+      const primaryProvider = new ethers.JsonRpcProvider(
+        RPC_URLS[chainId], 
+        network,
+        {
           staticNetwork: network,
-          batchStallTime: 100,
-          batchMaxCount: 1
-        });
-      } catch (error) {
-        console.error(`Failed to create provider for ${url}:`, error);
-        return null;
+          timeout: RPC_TIMEOUTS.connection
+        }
+      );
+      
+      // Verify connection
+      primaryProvider.getBlockNumber().catch(() => {
+        throw new Error('Primary RPC failed');
+      });
+      
+      providerCache.set(chainId, primaryProvider);
+      return primaryProvider;
+    } catch (primaryError) {
+      console.warn(`Primary RPC failed for ${chainId}, trying fallbacks...`);
+      
+      // Try fallback RPCs
+      const fallbacks = RPC_FALLBACKS[chainId] || [];
+      for (const url of fallbacks) {
+        try {
+          const network = {
+            chainId: Number(CHAINS[chainId]),
+            name: chainId.toLowerCase()
+          };
+          
+          const fallbackProvider = new ethers.JsonRpcProvider(
+            url,
+            network,
+            {
+              staticNetwork: network,
+              timeout: RPC_TIMEOUTS.connection
+            }
+          );
+          
+          // Verify connection
+          await fallbackProvider.getBlockNumber();
+          
+          providerCache.set(chainId, fallbackProvider);
+          return fallbackProvider;
+        } catch (fallbackError) {
+          console.warn(`Fallback RPC ${url} failed:`, fallbackError.message);
+          continue;
+        }
       }
-    }).filter(Boolean);
-
-    if (providers.length === 0) {
-      throw new Error(`No valid RPC providers available for ${chainId}`);
+      
+      throw new Error(`No working RPC providers for ${chainId}`);
     }
-
-    const provider = providers.length === 1 
-      ? providers[0] 
-      : new ethers.FallbackProvider(providers, 1); // Quorum of 1
-
-    providerCache.set(chainId, provider);
   }
   return providerCache.get(chainId);
 };
 
-// Enhanced address validation
 const getSafeAddress = (address) => {
   if (!address) return address;
   if (typeof address !== 'string') return address;
@@ -60,27 +85,27 @@ const getSafeAddress = (address) => {
   }
 };
 
-// Improved gas estimation with fallbacks
 const getGasParams = async (provider) => {
   try {
     const feeData = await provider.getFeeData();
     return {
-      maxFeePerGas: feeData.maxFeePerGas ?? ethers.parseUnits('50', 'gwei'),
-      maxPriorityFeePerGas: feeData.maxPriorityFeePerGas ?? ethers.parseUnits('2', 'gwei'),
-      gasLimit: 350000 // Slightly higher default limit
+      maxFeePerGas: feeData.maxFeePerGas?.mul(Math.floor(GAS_SETTINGS.maxFeeMultiplier * 100)).div(100) 
+        ?? ethers.parseUnits('50', 'gwei'),
+      maxPriorityFeePerGas: feeData.maxPriorityFeePerGas?.mul(Math.floor(GAS_SETTINGS.maxPriorityFeeMultiplier * 100)).div(100)
+        ?? ethers.parseUnits('2', 'gwei'),
+      gasLimit: GAS_SETTINGS.defaultGasLimit
     };
   } catch (error) {
     console.warn('Failed to get fee data, using defaults:', error);
     return {
       maxFeePerGas: ethers.parseUnits('50', 'gwei'),
       maxPriorityFeePerGas: ethers.parseUnits('2', 'gwei'),
-      gasLimit: 350000
+      gasLimit: GAS_SETTINGS.defaultGasLimit
     };
   }
 };
 
-// Transaction retry wrapper
-const withRetry = async (fn, retries = 3, delay = 2000) => {
+const withRetry = async (fn, retries = 3, delay = GAS_SETTINGS.retryDelay) => {
   let lastError;
   for (let i = 0; i < retries; i++) {
     try {
@@ -98,7 +123,6 @@ const withRetry = async (fn, retries = 3, delay = 2000) => {
 export const sendToken = async ({ sourceChain, destChain, asset, amount, privateKey }) => {
   return withRetry(async () => {
     try {
-      // Validate chains
       if (!CHAINS[sourceChain] || !CHAINS[destChain]) {
         throw new Error(`Invalid chain: ${sourceChain} → ${destChain}`);
       }
@@ -107,10 +131,9 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
       const wallet = new ethers.Wallet(privateKey, provider);
       const gasParams = await getGasParams(provider);
 
-      // Get bridge address with better validation
       const bridgeAddress = UNION_CONTRACT[sourceChain];
       if (!bridgeAddress || bridgeAddress.startsWith('0x000')) {
-        throw new Error(`Missing or invalid bridge address for ${sourceChain}`);
+        throw new Error(`Missing bridge address for ${sourceChain}`);
       }
       const safeBridgeAddress = getSafeAddress(bridgeAddress);
 
@@ -135,8 +158,6 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
 
       // Handle token transfers
       const tokenAddress = getSafeAddress(asset);
-      const isWETH = tokenAddress === getSafeAddress(TOKENS.WETH?.[sourceChain]);
-
       const erc20 = new ethers.Contract(
         tokenAddress,
         [
@@ -167,7 +188,7 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
         await withRetry(() => approveTx.wait());
       }
 
-      console.log(`⏳ Bridging ${isWETH ? 'WETH' : 'ERC20'} to ${destChain}...`);
+      console.log(`⏳ Bridging to ${destChain}...`);
       const bridge = new ethers.Contract(
         safeBridgeAddress,
         [
