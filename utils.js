@@ -1,5 +1,5 @@
 import { ethers } from 'ethers';
-import { CHAINS, RPC_URLS, RPC_FALLBACKS, UNION_CONTRACT, TOKENS, GAS_SETTINGS } from './config.js';
+import { CHAINS, RPC_URLS, RPC_FALLBACKS, UNION_CONTRACT, TOKENS, GAS_SETTINGS, RPC_TIMEOUTS, TRANSACTION_SETTINGS } from './config.js';
 
 const providerCache = new Map();
 
@@ -12,13 +12,24 @@ export const getProvider = async (chainId) => {
 
         for (const url of endpoints) {
             try {
-                const provider = new ethers.JsonRpcProvider(url, {
-                    chainId: Number(CHAINS[chainId]),
-                    name: chainId.toLowerCase()
+                const provider = new ethers.JsonRpcProvider({
+                    url,
+                    network: {
+                        chainId: Number(CHAINS[chainId]),
+                        name: chainId.toLowerCase()
+                    },
+                    staticNetwork: true,
+                    timeout: RPC_TIMEOUTS.connection
                 });
 
-                // Test connection
-                await provider.getBlockNumber();
+                // Test connection with timeout
+                await Promise.race([
+                    provider.getBlockNumber(),
+                    new Promise((_, reject) => 
+                        setTimeout(() => reject(new Error('RPC timeout')), RPC_TIMEOUTS.request)
+                    )
+                ]);
+                
                 providerCache.set(chainId, provider);
                 return provider;
             } catch (error) {
@@ -48,12 +59,12 @@ const getGasParams = async (provider) => {
     try {
         const feeData = await provider.getFeeData();
         return {
-            maxFeePerGas: feeData.maxFeePerGas ? 
-                feeData.maxFeePerGas.mul(Math.floor(GAS_SETTINGS.maxFeeMultiplier * 100)).div(100) :
-                ethers.parseUnits('50', 'gwei'),
-            maxPriorityFeePerGas: feeData.maxPriorityFeePerGas ? 
-                feeData.maxPriorityFeePerGas.mul(Math.floor(GAS_SETTINGS.maxPriorityFeeMultiplier * 100)).div(100) :
-                ethers.parseUnits('2', 'gwei'),
+            maxFeePerGas: feeData.maxFeePerGas 
+                ? feeData.maxFeePerGas.mul(GAS_SETTINGS.maxFeeMultiplier * 100).div(100)
+                : ethers.parseUnits('50', 'gwei'),
+            maxPriorityFeePerGas: feeData.maxPriorityFeePerGas 
+                ? feeData.maxPriorityFeePerGas.mul(GAS_SETTINGS.maxPriorityFeeMultiplier * 100).div(100)
+                : ethers.parseUnits('2', 'gwei'),
             gasLimit: GAS_SETTINGS.defaultGasLimit
         };
     } catch (error) {
@@ -66,15 +77,16 @@ const getGasParams = async (provider) => {
     }
 };
 
-const withRetry = async (fn, retries = 3, delay = GAS_SETTINGS.retryDelay) => {
+const withRetry = async (fn, operation = 'operation') => {
     let lastError;
-    for (let i = 0; i < retries; i++) {
+    for (let i = 0; i < TRANSACTION_SETTINGS.maxRetries; i++) {
         try {
+            console.log(`Attempt ${i+1}/${TRANSACTION_SETTINGS.maxRetries} for ${operation}`);
             return await fn();
         } catch (error) {
             lastError = error;
-            if (i < retries - 1) {
-                await new Promise(resolve => setTimeout(resolve, delay));
+            if (i < TRANSACTION_SETTINGS.maxRetries - 1) {
+                await new Promise(resolve => setTimeout(resolve, GAS_SETTINGS.retryDelay));
             }
         }
     }
@@ -93,7 +105,7 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
             const wallet = new ethers.Wallet(privateKey, provider);
             const gasParams = await getGasParams(provider);
 
-            // Get bridge address
+            // Get bridge address with validation
             const bridgeAddress = UNION_CONTRACT[sourceChain];
             if (!bridgeAddress || bridgeAddress.startsWith('0x000')) {
                 throw new Error(`Missing bridge address for ${sourceChain}`);
@@ -101,7 +113,8 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
             const safeBridgeAddress = getSafeAddress(bridgeAddress);
 
             // Handle native ETH transfers
-            if (asset === 'native' || asset === 'NATIVE') {
+            const isNative = asset === 'native' || asset === 'NATIVE';
+            if (isNative) {
                 const bridge = new ethers.Contract(
                     safeBridgeAddress,
                     ['function depositNative(uint16 destChainId) payable'],
@@ -131,24 +144,25 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
                 wallet
             );
 
-            // Get token decimals
-            const decimals = await withRetry(() => erc20.decimals().catch(() => 18));
+            // Get token decimals with fallback
+            const decimals = await withRetry(() => erc20.decimals().catch(() => 18), 'decimals()');
             const parsedAmount = ethers.parseUnits(amount.toString(), decimals);
 
             // Check balance
-            const balance = await withRetry(() => erc20.balanceOf(wallet.address));
+            const balance = await withRetry(() => erc20.balanceOf(wallet.address), 'balanceOf()');
             if (balance < parsedAmount) {
                 throw new Error(`Insufficient balance. Need ${amount}, has ${ethers.formatUnits(balance, decimals)}`);
             }
 
-            // Check allowance and approve if needed
-            const allowance = await withRetry(() => erc20.allowance(wallet.address, safeBridgeAddress));
+            // Check and approve if needed
+            const allowance = await withRetry(() => erc20.allowance(wallet.address, safeBridgeAddress), 'allowance()');
             if (allowance < parsedAmount) {
                 console.log('⏳ Approving token transfer...');
                 const approveTx = await withRetry(() => 
-                    erc20.approve(safeBridgeAddress, parsedAmount, gasParams)
+                    erc20.approve(safeBridgeAddress, parsedAmount, gasParams),
+                    'approve()'
                 );
-                await withRetry(() => approveTx.wait());
+                await withRetry(() => approveTx.wait(), 'approve wait');
             }
 
             console.log(`⏳ Bridging to ${destChain}...`);
@@ -158,11 +172,20 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
                 wallet
             );
 
-            const tx = await bridge.depositERC20(
-                tokenAddress,
-                parsedAmount,
-                CHAINS[destChain],
-                gasParams
+            const tx = await withRetry(() => 
+                bridge.depositERC20(
+                    tokenAddress,
+                    parsedAmount,
+                    CHAINS[destChain],
+                    gasParams
+                ),
+                'depositERC20'
+            );
+
+            // Wait for confirmation
+            await withRetry(() => 
+                provider.waitForTransaction(tx.hash, TRANSACTION_SETTINGS.blockConfirmation),
+                'transaction confirmation'
             );
 
             return tx.hash;
@@ -179,5 +202,5 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
             });
             throw error;
         }
-    });
+    }, 'sendToken');
 };
