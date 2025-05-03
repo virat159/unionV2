@@ -44,9 +44,9 @@ export const TOKENS = {
   }
 };
 
-// Bridge Contracts
+// Bridge Contracts (UPDATED)
 export const UNION_CONTRACT = {
-  SEPOLIA: '0x3f4B6664338F23d2397c953f2AB4Ce8031663f80',
+  SEPOLIA: '0x5FbE74A283f7954f10AA04C2eDf55578811aeb03', // Corrected address
   HOLESKY: '0x2D1a8743a134126754b52Ee64843C37C133bA18a'
 };
 
@@ -56,11 +56,11 @@ export const EXPLORERS = {
   HOLESKY: 'https://holesky.etherscan.io'
 };
 
-// Gas Settings
+// Gas Settings (OPTIMIZED)
 export const GAS_SETTINGS = {
-  defaultGasLimit: 350000,
-  minMaxFeePerGas: ethers.parseUnits("3", "gwei"),
-  minPriorityFee: ethers.parseUnits("2.5", "gwei"),
+  defaultGasLimit: 300000, // Reduced from 350000 to match successful manual TX
+  minMaxFeePerGas: ethers.parseUnits("2", "gwei"), // Reduced from 3 gwei
+  minPriorityFee: ethers.parseUnits("1.5", "gwei"), // Reduced from 2.5 gwei
   retryDelay: 5000,
   maxFeeBuffer: 1.2,
   maxPriorityBuffer: 1.1
