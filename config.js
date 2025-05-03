@@ -1,7 +1,7 @@
 // config.js
 export const CHAINS = {
   SEPOLIA: 11155111,
-  CORN: 99999
+  CORN: 21000001
 };
 
 export const RPC_URLS = {
