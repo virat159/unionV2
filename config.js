@@ -4,12 +4,12 @@ const CHAINS = {
   BABYLON: 'babylon-testnet',
   HOLESKY: 17000,
   SEPOLIA: 11155111,
-  CORN: 99999, // Confirm Corn chain ID
+  CORN: 21000001, // Confirm Corn chain ID
 };
 
 // Union V2 Contract Addresses (update per chain)
 const UNION_CONTRACT = {
-  HOLESKY: '0xUnionV2AddressOnHolesky', // Replace with actual address
+  HOLESKY: '0x94373a4919B3240D86eA41593D5eBa789FEF3848', // Replace with actual address
   XION: 'xion1unioncontract...',        // Replace with actual address
 };
 
@@ -18,7 +18,7 @@ const RPC_URLS = {
   HOLESKY: 'https://rpc.holesky.ethpandaops.io',
   SEPOLIA: 'https://rpc.sepolia.org',
   XION: 'https://xion-testnet-rpc.polkachu.com',
-  CORN: 'https://corn-testnet-rpc.example.com' // Replace with actual RPC
+  CORN: 'https://rpc.ankr.com/corn_testnet' // Replace with actual RPC
 };
 
 module.exports = { CHAINS, UNION_CONTRACT, RPC_URLS };
