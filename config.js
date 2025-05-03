@@ -1,6 +1,6 @@
 import { ethers } from 'ethers';
 
-// Chain IDs
+// Chain IDs (unchanged)
 export const CHAINS = {
   SEPOLIA: 11155111,
   HOLESKY: 17000,
@@ -9,7 +9,7 @@ export const CHAINS = {
   CORN: 99999
 };
 
-// RPC Endpoints
+// RPC Endpoints (unchanged)
 export const RPC_URLS = {
   SEPOLIA: 'https://eth-sepolia.g.alchemy.com/v2/GSQ458MB7rf3l9f7cPgntZ3txx9uOmwB',
   HOLESKY: 'https://eth-holesky.g.alchemy.com/v2/GSQ458MB7rf3l9f7cPgntZ3txx9uOmwB',
@@ -18,7 +18,7 @@ export const RPC_URLS = {
   CORN: 'https://rpc.ankr.com/corn_testnet'
 };
 
-// Fallback RPCs
+// Fallback RPCs (unchanged)
 export const RPC_FALLBACKS = {
   SEPOLIA: [
     'https://rpc.sepolia.org',
@@ -32,7 +32,7 @@ export const RPC_FALLBACKS = {
   ]
 };
 
-// Token Contracts
+// Token Contracts (unchanged)
 export const TOKENS = {
   WETH: {
     SEPOLIA: '0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9',
@@ -44,43 +44,52 @@ export const TOKENS = {
   }
 };
 
-// Bridge Contracts (UPDATED)
+// Bridge Contracts (unchanged - already corrected)
 export const UNION_CONTRACT = {
-  SEPOLIA: '0x5FbE74A283f7954f10AA04C2eDf55578811aeb03', // Corrected address
+  SEPOLIA: '0x5FbE74A283f7954f10AA04C2eDf55578811aeb03',
   HOLESKY: '0x2D1a8743a134126754b52Ee64843C37C133bA18a'
 };
 
-// Block Explorers
+// Block Explorers (unchanged)
 export const EXPLORERS = {
   SEPOLIA: 'https://sepolia.etherscan.io',
   HOLESKY: 'https://holesky.etherscan.io'
 };
 
-// Gas Settings (OPTIMIZED)
+// Gas Settings (UPDATED TO 10/9.5 GWEI)
 export const GAS_SETTINGS = {
-  defaultGasLimit: 300000, // Reduced from 350000 to match successful manual TX
-  minMaxFeePerGas: ethers.parseUnits("2", "gwei"), // Reduced from 3 gwei
-  minPriorityFee: ethers.parseUnits("1.5", "gwei"), // Reduced from 2.5 gwei
+  defaultGasLimit: 500000,           // Increased for safety
+  minMaxFeePerGas: ethers.parseUnits("10", "gwei"),    // Fixed 10 Gwei
+  minPriorityFee: ethers.parseUnits("9.5", "gwei"),    // Fixed 9.5 Gwei
   retryDelay: 5000,
-  maxFeeBuffer: 1.2,
-  maxPriorityBuffer: 1.1
+  maxFeeBuffer: 1.0,                // Disabled buffers
+  maxPriorityBuffer: 1.0            // Disabled buffers
 };
 
-// Network Timeouts
+// Network Timeouts (unchanged)
 export const RPC_TIMEOUTS = {
   connection: 15000,
   request: 30000
 };
 
-// Transaction Settings
+// Transaction Settings (unchanged)
 export const TRANSACTION_SETTINGS = {
   maxRetries: 5,
   confirmationTimeout: 120000,
   blockConfirmations: 2
 };
 
-// Bridge Settings
+// Bridge Settings (unchanged)
 export const BRIDGE_SETTINGS = {
   minApprovalAmount: ethers.parseUnits("1000", "ether"),
   operationTimeout: 300000
+};
+
+// New: Fee Validator
+export const validateGasSettings = () => {
+  console.log("Active Gas Settings:", {
+    maxFee: ethers.formatUnits(GAS_SETTINGS.minMaxFeePerGas, "gwei") + " gwei",
+    priorityFee: ethers.formatUnits(GAS_SETTINGS.minPriorityFee, "gwei") + " gwei",
+    gasLimit: GAS_SETTINGS.defaultGasLimit
+  });
 };
