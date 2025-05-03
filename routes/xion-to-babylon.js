@@ -1,12 +1,18 @@
 const { sendToken } = require('../utils');
 const { CHAINS } = require('../config');
+const prompt = require('prompt-sync')(); // Import prompt
+
+// Ask for private key securely
+const privateKey = prompt('Enter your testnet private key (will not echo): ', {
+  echo: '*' // Mask input
+});
 
 const XION_TO_BABYLON = {
   sourceChain: 'XION',
   destChain: 'BABYLON',
-  asset: 'uxion', // Xion native token
+  asset: 'uxion',
   amount: 10,
-  privateKey: process.env.PRIVATE_KEY // From GitHub Secrets
+  privateKey: privateKey // Use prompted key
 };
 
 sendToken(XION_TO_BABYLON)
