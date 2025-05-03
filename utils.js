@@ -56,13 +56,19 @@ const getSafeAddress = (address) => {
 const getGasParams = async (provider) => {
     try {
         const feeData = await provider.getFeeData();
+        
+        // Handle cases where fee data might be undefined or incomplete
+        const maxFeePerGas = feeData.maxFeePerGas 
+            ? feeData.maxFeePerGas.mul(GAS_SETTINGS.maxFeeMultiplier * 100).div(100)
+            : ethers.parseUnits('50', 'gwei'); // Default value if maxFeePerGas is unavailable
+        
+        const maxPriorityFeePerGas = feeData.maxPriorityFeePerGas 
+            ? feeData.maxPriorityFeePerGas.mul(GAS_SETTINGS.maxPriorityFeeMultiplier * 100).div(100)
+            : ethers.parseUnits('2', 'gwei'); // Default value if maxPriorityFeePerGas is unavailable
+        
         return {
-            maxFeePerGas: feeData.maxFeePerGas 
-                ? feeData.maxFeePerGas.mul(GAS_SETTINGS.maxFeeMultiplier * 100).div(100)
-                : ethers.parseUnits('50', 'gwei'),
-            maxPriorityFeePerGas: feeData.maxPriorityFeePerGas 
-                ? feeData.maxPriorityFeePerGas.mul(GAS_SETTINGS.maxPriorityFeeMultiplier * 100).div(100)
-                : ethers.parseUnits('2', 'gwei'),
+            maxFeePerGas,
+            maxPriorityFeePerGas,
             gasLimit: GAS_SETTINGS.defaultGasLimit
         };
     } catch (error) {
