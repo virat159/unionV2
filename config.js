@@ -58,12 +58,12 @@ export const EXPLORERS = {
 
 // Gas Settings
 export const GAS_SETTINGS = {
-  defaultGasLimit: 250000,       // Increased based on actual usage
-  minMaxFeePerGas: ethers.parseUnits("2.5", "gwei"),
-  minPriorityFee: ethers.parseUnits("2", "gwei"),
+  defaultGasLimit: 350000,
+  minMaxFeePerGas: ethers.parseUnits("3", "gwei"),
+  minPriorityFee: ethers.parseUnits("2.5", "gwei"),
   retryDelay: 5000,
-  maxFeeBuffer: 1.2,            // 20% buffer
-  maxPriorityBuffer: 1.1        // 10% buffer
+  maxFeeBuffer: 1.2,
+  maxPriorityBuffer: 1.1
 };
 
 // Network Timeouts
