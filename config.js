@@ -1,24 +1,19 @@
-// Chain IDs (confirm with Union's docs)
+// config.js
 export const CHAINS = {
-  XION: 'xion-testnet-1',
-  BABYLON: 'babylon-testnet',
-  HOLESKY: 17000,
   SEPOLIA: 11155111,
-  CORN: 21000001,
+  CORN: 21000001
 };
 
-// Union V2 Contract Addresses
-export const UNION_CONTRACT = {
-  HOLESKY: '0x94373a4919B3240D86eA41593D5eBa789FEF3848',
-  XION: 'xion1unioncontract...', // Update with real address
-};
-
-// RPC URLs
 export const RPC_URLS = {
-  HOLESKY: 'https://rpc.holesky.ethpandaops.io',
   SEPOLIA: 'https://rpc.sepolia.org',
-  XION: 'https://rpc.xion-testnet-2.burnt.com:443',
-  CORN: 'https://rpc.ankr.com/corn_testnet',
+  CORN: 'https://rpc.ankr.com/corn_testnet'
 };
 
-// No need for module.exports in ES Modules
+export const UNION_CONTRACT = {
+  SEPOLIA: '0xUnionV2SepoliaContractAddress' // Replace with actual
+};
+
+// Add this new export:
+export const TOKEN_ADDRESSES = {
+  SEPOLIA_WETH: '0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9' // Sepolia WETH
+};
