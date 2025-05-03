@@ -1,27 +1,38 @@
 import { ethers } from 'ethers';
-import { CHAINS, UNION_CONTRACT, RPC_URLS } from './config.js';
+import { CHAINS, RPC_URLS, UNION_CONTRACT } from './config.js';
 
-// Initialize provider and wallet
 export const getProvider = (chainId) => {
-  const rpcUrl = RPC_URLS[chainId];
-  return new ethers.JsonRpcProvider(rpcUrl);
+  return new ethers.JsonRpcProvider(RPC_URLS[chainId], {
+    staticNetwork: true,
+    timeout: 30000
+  });
 };
 
-// Generic token transfer function
 export const sendToken = async ({ sourceChain, destChain, asset, amount, privateKey }) => {
   const provider = getProvider(sourceChain);
   const wallet = new ethers.Wallet(privateKey, provider);
-  
-  const unionContract = new ethers.Contract(
-    UNION_CONTRACT[sourceChain],
-    ['function transfer(uint16 destChainId, address asset, uint256 amount)'],
+
+  // Native token transfer
+  if (asset === 'native') {
+    const tx = await wallet.sendTransaction({
+      to: UNION_CONTRACT[sourceChain],
+      value: ethers.parseEther(amount.toString())
+    });
+    return tx.hash;
+  }
+
+  // ERC20 token transfer
+  const contract = new ethers.Contract(
+    asset,
+    ['function transfer(address to, uint256 amount)'],
     wallet
   );
-
-  const tx = await unionContract.transfer(
-    CHAINS[destChain],
-    asset,
-    ethers.parseUnits(amount.toString(), 18) // Adjust decimals
+  
+  const tx = await contract.transfer(
+    UNION_CONTRACT[sourceChain],
+    asset.includes('USDC') 
+      ? ethers.parseUnits(amount.toString(), 6) // USDC decimals
+      : ethers.parseUnits(amount.toString(), 18) // WETH decimals
   );
   
   return tx.hash;
