@@ -57,25 +57,29 @@ const getGasParams = async (provider) => {
     try {
         const feeData = await provider.getFeeData();
         
-        // Handle cases where fee data might be undefined or incomplete
-        const maxFeePerGas = feeData.maxFeePerGas 
-            ? feeData.maxFeePerGas.mul(GAS_SETTINGS.maxFeeMultiplier * 100).div(100)
-            : ethers.parseUnits('50', 'gwei'); // Default value if maxFeePerGas is unavailable
-        
-        const maxPriorityFeePerGas = feeData.maxPriorityFeePerGas 
-            ? feeData.maxPriorityFeePerGas.mul(GAS_SETTINGS.maxPriorityFeeMultiplier * 100).div(100)
-            : ethers.parseUnits('2', 'gwei'); // Default value if maxPriorityFeePerGas is unavailable
-        
+        // Convert BigNumber values to BigInt for Ethers v6 compatibility
+        const baseFee = feeData.gasPrice || feeData.maxFeePerGas;
+        const priorityFee = feeData.maxPriorityFeePerGas || ethers.parseUnits("1.5", "gwei");
+
+        // Calculate with buffers (using BigInt arithmetic)
+        const maxFeePerGas = baseFee 
+            ? (baseFee * BigInt(Math.floor(GAS_SETTINGS.maxFeeMultiplier * 100))) / 100n
+            : ethers.parseUnits("1.71755288", "gwei"); // Your specified base fee
+
+        const maxPriorityFeePerGas = priorityFee 
+            ? (priorityFee * BigInt(Math.floor(GAS_SETTINGS.maxPriorityFeeMultiplier * 100))) / 100n
+            : ethers.parseUnits("1.5", "gwei"); // Your specified priority fee
+
         return {
             maxFeePerGas,
             maxPriorityFeePerGas,
             gasLimit: GAS_SETTINGS.defaultGasLimit
         };
     } catch (error) {
-        console.warn('Failed to get fee data, using defaults:', error);
+        console.warn('Failed to get fee data, using conservative defaults:', error);
         return {
-            maxFeePerGas: ethers.parseUnits('50', 'gwei'),
-            maxPriorityFeePerGas: ethers.parseUnits('2', 'gwei'),
+            maxFeePerGas: ethers.parseUnits("1.71755288", "gwei"),
+            maxPriorityFeePerGas: ethers.parseUnits("1.5", "gwei"),
             gasLimit: GAS_SETTINGS.defaultGasLimit
         };
     }
@@ -136,7 +140,10 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
             }
 
             // Handle ERC20 token transfers
-            const tokenAddress = getSafeAddress(asset || '0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9');
+            const tokenAddress = asset === 'WETH' && sourceChain === 'SEPOLIA' 
+                ? '0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9' // Sepolia WETH
+                : getSafeAddress(asset);
+
             const erc20 = new ethers.Contract(
                 tokenAddress,
                 [
