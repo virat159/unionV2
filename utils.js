@@ -3,7 +3,7 @@ import { CHAINS, RPC_URLS, RPC_FALLBACKS, UNION_CONTRACT, TOKENS, GAS_SETTINGS, 
 
 const providerCache = new Map();
 
-export const getProvider = (chainId) => {
+export const getProvider = async (chainId) => {  // Made async
   if (!providerCache.has(chainId)) {
     // First try primary RPC
     try {
@@ -21,8 +21,8 @@ export const getProvider = (chainId) => {
         }
       );
       
-      // Verify connection
-      primaryProvider.getBlockNumber().catch(() => {
+      // Verify connection with await
+      await primaryProvider.getBlockNumber().catch(() => {
         throw new Error('Primary RPC failed');
       });
       
@@ -49,7 +49,7 @@ export const getProvider = (chainId) => {
             }
           );
           
-          // Verify connection
+          // Verify connection with await
           await fallbackProvider.getBlockNumber();
           
           providerCache.set(chainId, fallbackProvider);
@@ -70,7 +70,6 @@ const getSafeAddress = (address) => {
   if (!address) return address;
   if (typeof address !== 'string') return address;
   
-  // Skip validation for non-EVM addresses (Xion format)
   if (address.startsWith('xion')) return address;
 
   try {
@@ -127,7 +126,7 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
         throw new Error(`Invalid chain: ${sourceChain} → ${destChain}`);
       }
 
-      const provider = getProvider(sourceChain);
+      const provider = await getProvider(sourceChain);  // Added await here
       const wallet = new ethers.Wallet(privateKey, provider);
       const gasParams = await getGasParams(provider);
 
@@ -137,7 +136,6 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
       }
       const safeBridgeAddress = getSafeAddress(bridgeAddress);
 
-      // Handle native transfers
       const isNative = asset === 'native' || asset === 'NATIVE';
       if (isNative) {
         const bridge = new ethers.Contract(
@@ -156,7 +154,6 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
         return tx.hash;
       }
 
-      // Handle token transfers
       const tokenAddress = getSafeAddress(asset);
       const erc20 = new ethers.Contract(
         tokenAddress,
@@ -172,13 +169,11 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
       const decimals = await withRetry(() => erc20.decimals().catch(() => 18));
       const parsedAmount = ethers.parseUnits(amount.toString(), decimals);
 
-      // Check balance
       const balance = await withRetry(() => erc20.balanceOf(wallet.address));
       if (balance < parsedAmount) {
         throw new Error(`Insufficient balance. Need ${amount}, has ${ethers.formatUnits(balance, decimals)}`);
       }
 
-      // Check and approve if needed
       const allowance = await withRetry(() => erc20.allowance(wallet.address, safeBridgeAddress));
       if (allowance < parsedAmount) {
         console.log('⏳ Approving token transfer...');
