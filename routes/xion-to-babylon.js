@@ -1,20 +1,19 @@
-const { sendToken } = require('../utils');
-const { CHAINS } = require('../config');
-const prompt = require('prompt-sync')(); // Import prompt
+import { sendToken } from '../utils.js'; // Note .js extension
+import { CHAINS } from '../config.js';
 
-// Ask for private key securely
-const privateKey = prompt('Enter your testnet private key (will not echo): ', {
-  echo: '*' // Mask input
-});
+// Prompt for private key (if not using .env)
+import prompt from 'prompt-sync';
+const getKey = prompt({ sigint: true });
+const privateKey = getKey('Enter your private key (hidden): ');
 
 const XION_TO_BABYLON = {
   sourceChain: 'XION',
   destChain: 'BABYLON',
   asset: 'uxion',
   amount: 10,
-  privateKey: privateKey // Use prompted key
+  privateKey: privateKey
 };
 
 sendToken(XION_TO_BABYLON)
-  .then(txHash => console.log(`✅ XION → Babylon TX: ${txHash}`))
+  .then(txHash => console.log(`✅ TX Hash: ${txHash}`))
   .catch(console.error);
