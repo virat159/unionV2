@@ -1,3 +1,4 @@
+import { ethers } from 'ethers';
 import { sendToken } from '../utils.js';
 import { CHAINS, TOKENS, UNION_CONTRACT } from '../config.js';
 import pkg from 'prompt-sync';
