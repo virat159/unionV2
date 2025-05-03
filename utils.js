@@ -13,7 +13,7 @@ export const getProvider = async (chainId) => {
         for (const url of endpoints) {
             try {
                 const provider = new ethers.JsonRpcProvider({
-                    url,
+                    url: url.toString(),
                     network: {
                         chainId: Number(CHAINS[chainId]),
                         name: chainId.toLowerCase()
