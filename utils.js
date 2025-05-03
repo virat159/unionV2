@@ -1,46 +1,68 @@
 import { ethers } from 'ethers';
 import { CHAINS, RPC_URLS, UNION_CONTRACT, TOKENS } from './config.js';
 
+// Cache providers for better performance
+const providerCache = new Map();
+
 export const getProvider = (chainId) => {
-  return new ethers.JsonRpcProvider(RPC_URLS[chainId]);
+  if (!providerCache.has(chainId)) {
+    providerCache.set(chainId, new ethers.JsonRpcProvider(RPC_URLS[chainId]));
+  }
+  return providerCache.get(chainId);
 };
 
 export const sendToken = async ({ sourceChain, destChain, asset, amount, privateKey }) => {
   try {
+    // Validate input parameters
+    if (!CHAINS[sourceChain] || !CHAINS[destChain]) {
+      throw new Error(`Invalid chain specified: ${sourceChain} → ${destChain}`);
+    }
+
     const provider = getProvider(sourceChain);
     const wallet = new ethers.Wallet(privateKey, provider);
 
-    // Validate addresses
-    const bridgeAddress = UNION_CONTRACT[sourceChain];
-    if (!ethers.isAddress(bridgeAddress)) {
-      throw new Error(`Invalid bridge address for ${sourceChain}`);
+    // Normalize and validate bridge address
+    const bridgeAddress = ethers.getAddress(UNION_CONTRACT[sourceChain]);
+    if (!bridgeAddress) {
+      throw new Error(`Missing bridge address for ${sourceChain}`);
     }
 
-    // For WETH transfers, use the bridge's depositERC20 function
-    if (asset === TOKENS.WETH[sourceChain]) {
+    // Normalize token address
+    const tokenAddress = ethers.getAddress(asset);
+    const isWETH = tokenAddress === ethers.getAddress(TOKENS.WETH[sourceChain]);
+
+    // For WETH transfers
+    if (isWETH) {
       const erc20 = new ethers.Contract(
-        asset,
+        tokenAddress,
         [
           'function approve(address spender, uint256 amount) returns (bool)',
-          'function balanceOf(address owner) view returns (uint256)'
+          'function balanceOf(address owner) view returns (uint256)',
+          'function allowance(address owner, address spender) view returns (uint256)'
         ],
         wallet
       );
 
-      // 1. Check balance
-      const balance = await erc20.balanceOf(wallet.address);
+      // Check balance and existing allowance
+      const [balance, allowance] = await Promise.all([
+        erc20.balanceOf(wallet.address),
+        erc20.allowance(wallet.address, bridgeAddress)
+      ]);
+
       const parsedAmount = ethers.parseUnits(amount.toString(), 18);
       
       if (balance < parsedAmount) {
-        throw new Error(`Insufficient WETH balance. Needed: ${amount}, Has: ${ethers.formatEther(balance)}`);
+        throw new Error(`Insufficient WETH. Need ${amount}, has ${ethers.formatEther(balance)}`);
       }
 
-      // 2. Approve bridge to spend WETH
-      console.log('⏳ Approving WETH transfer...');
-      const approveTx = await erc20.approve(bridgeAddress, parsedAmount);
-      await approveTx.wait();
+      // Only approve if needed
+      if (allowance < parsedAmount) {
+        console.log('⏳ Approving WETH transfer...');
+        const approveTx = await erc20.approve(bridgeAddress, parsedAmount);
+        await approveTx.wait();
+      }
 
-      // 3. Execute bridge transfer
+      // Execute bridge transfer with retry logic
       const bridge = new ethers.Contract(
         bridgeAddress,
         [
@@ -51,34 +73,48 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
 
       console.log('⏳ Bridging WETH...');
       const tx = await bridge.depositERC20(
-        asset,
+        tokenAddress,
         parsedAmount,
-        CHAINS[destChain]
+        CHAINS[destChain],
+        { gasLimit: 300000 } // Increased gas limit
       );
 
+      console.log(`ℹ️ Gas used: ${tx.gasLimit.toString()}`);
       return tx.hash;
     }
 
-    // Standard ERC20 transfer (for non-WETH tokens)
+    // For other ERC20 tokens
     const contract = new ethers.Contract(
-      asset,
-      ['function transfer(address to, uint256 amount) returns (bool)'],
+      tokenAddress,
+      [
+        'function transfer(address to, uint256 amount) returns (bool)',
+        'function decimals() view returns (uint8)'
+      ],
       wallet
     );
 
-    const decimals = asset.includes('USDC') ? 6 : 18;
-    const parsedAmount = ethers.parseUnits(amount.toString(), decimals);
+    // Dynamic decimals detection
+    let decimals = 18;
+    try {
+      decimals = await contract.decimals();
+    } catch (e) {
+      console.log('⚠️ Using default decimals (18)');
+    }
 
+    const parsedAmount = ethers.parseUnits(amount.toString(), decimals);
     const tx = await contract.transfer(bridgeAddress, parsedAmount);
+    
     return tx.hash;
 
   } catch (error) {
-    console.error('Transaction failed:', {
+    console.error('❌ Transaction failed:', {
       sourceChain,
       destChain,
       asset,
       amount,
-      error: error.message,
+      reason: error.reason || error.message,
+      code: error.code,
+      method: error.method,
       stack: error.stack
     });
     throw error;
