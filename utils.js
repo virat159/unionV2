@@ -12,15 +12,13 @@ export const getProvider = async (chainId) => {
 
         for (const url of endpoints) {
             try {
-                const provider = new ethers.JsonRpcProvider({
-                    url: url.toString(),
-                    network: {
+                const provider = new ethers.JsonRpcProvider(
+                    url,
+                    {
                         chainId: Number(CHAINS[chainId]),
                         name: chainId.toLowerCase()
-                    },
-                    staticNetwork: true,
-                    timeout: RPC_TIMEOUTS.connection
-                });
+                    }
+                );
 
                 // Test connection with timeout
                 await Promise.race([
