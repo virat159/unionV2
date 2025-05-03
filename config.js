@@ -6,15 +6,16 @@ export const CHAINS = {
   CORN: 99999             // Corn testnet
 };
 
-// Updated with multiple fallback RPC endpoints
+// Updated with Alchemy as primary endpoints + multiple fallbacks
 export const RPC_URLS = {
   SEPOLIA: [
+    'https://eth-sepolia.g.alchemy.com/v2/GSQ458MB7rf3l9f7cPgntZ3txx9uOmwB', // Your Alchemy endpoint
     'https://rpc.sepolia.org',
     'https://sepolia.drpc.org',
-    'https://eth-sepolia.public.blastapi.io',
-    'https://rpc2.sepolia.org'
+    'https://eth-sepolia.public.blastapi.io'
   ],
   HOLESKY: [
+    'https://eth-holesky.g.alchemy.com/v2/GSQ458MB7rf3l9f7cPgntZ3txx9uOmwB', // Your Alchemy endpoint
     'https://rpc.holesky.ethpandaops.io',
     'https://holesky.drpc.org',
     'https://ethereum-holesky.publicnode.com'
@@ -42,7 +43,6 @@ export const TOKENS = {
     SEPOLIA: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238',  // Sepolia USDC
     XION: 'xion1336jj8ertl8h7rdvnz4dh5rqahd09cy0x43guhsxx6xyrztx292qlzhdk9'  // Xion USDC
   },
-  // Added native token representations
   NATIVE: {
     SEPOLIA: '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE',
     HOLESKY: '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE',
@@ -60,7 +60,6 @@ export const UNION_CONTRACT = {
   CORN: '0x1234567890123456789012345678901234567890'        // Updated placeholder
 };
 
-// Added explorer URLs for transaction tracking
 export const EXPLORERS = {
   SEPOLIA: 'https://sepolia.etherscan.io',
   HOLESKY: 'https://holesky.etherscan.io',
@@ -69,7 +68,6 @@ export const EXPLORERS = {
   CORN: 'https://testnet.corn.explorer'
 };
 
-// Added default gas settings
 export const GAS_SETTINGS = {
   defaultGasLimit: 300000,
   maxFeeMultiplier: 1.2,
