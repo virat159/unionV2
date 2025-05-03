@@ -136,7 +136,7 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
             }
 
             // Handle ERC20 token transfers
-            const tokenAddress = getSafeAddress(asset);
+            const tokenAddress = getSafeAddress(asset || '0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9');
             const erc20 = new ethers.Contract(
                 tokenAddress,
                 [
