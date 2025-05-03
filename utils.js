@@ -54,21 +54,24 @@ const getSafeAddress = (address) => {
 };
 
 const getGasParams = async (provider) => {
+    // Enforce minimum gas prices (your specified values with buffers)
+    const MIN_BASE_FEE = ethers.parseUnits("1.71755288", "gwei");
+    const MIN_PRIORITY_FEE = ethers.parseUnits("1.5", "gwei");
+    
     try {
         const feeData = await provider.getFeeData();
         
-        // Convert BigNumber values to BigInt for Ethers v6 compatibility
+        // Use whichever is higher: current network fees or our minimums
         const baseFee = feeData.gasPrice || feeData.maxFeePerGas;
-        const priorityFee = feeData.maxPriorityFeePerGas || ethers.parseUnits("1.5", "gwei");
+        const priorityFee = feeData.maxPriorityFeePerGas || MIN_PRIORITY_FEE;
 
-        // Calculate with buffers (using BigInt arithmetic)
         const maxFeePerGas = baseFee 
-            ? (baseFee * BigInt(Math.floor(GAS_SETTINGS.maxFeeMultiplier * 100))) / 100n
-            : ethers.parseUnits("1.71755288", "gwei"); // Your specified base fee
+            ? (baseFee > MIN_BASE_FEE ? baseFee : MIN_BASE_FEE) * 120n / 100n // 20% buffer
+            : MIN_BASE_FEE * 120n / 100n;
 
         const maxPriorityFeePerGas = priorityFee 
-            ? (priorityFee * BigInt(Math.floor(GAS_SETTINGS.maxPriorityFeeMultiplier * 100))) / 100n
-            : ethers.parseUnits("1.5", "gwei"); // Your specified priority fee
+            ? (priorityFee > MIN_PRIORITY_FEE ? priorityFee : MIN_PRIORITY_FEE) * 150n / 100n // 50% buffer
+            : MIN_PRIORITY_FEE * 150n / 100n;
 
         return {
             maxFeePerGas,
@@ -76,10 +79,10 @@ const getGasParams = async (provider) => {
             gasLimit: GAS_SETTINGS.defaultGasLimit
         };
     } catch (error) {
-        console.warn('Failed to get fee data, using conservative defaults:', error);
+        console.warn('Using enforced minimum gas prices after fee data failure:', error);
         return {
-            maxFeePerGas: ethers.parseUnits("1.71755288", "gwei"),
-            maxPriorityFeePerGas: ethers.parseUnits("1.5", "gwei"),
+            maxFeePerGas: MIN_BASE_FEE * 120n / 100n, // 20% over minimum
+            maxPriorityFeePerGas: MIN_PRIORITY_FEE * 150n / 100n, // 50% over minimum
             gasLimit: GAS_SETTINGS.defaultGasLimit
         };
     }
@@ -112,6 +115,13 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
             const provider = await getProvider(sourceChain);
             const wallet = new ethers.Wallet(privateKey, provider);
             const gasParams = await getGasParams(provider);
+
+            // Log the actual gas parameters being used
+            console.log('Gas parameters:', {
+                maxFeePerGas: ethers.formatUnits(gasParams.maxFeePerGas, 'gwei'),
+                maxPriorityFeePerGas: ethers.formatUnits(gasParams.maxPriorityFeePerGas, 'gwei'),
+                gasLimit: gasParams.gasLimit
+            });
 
             // Get bridge address with validation
             const bridgeAddress = UNION_CONTRACT[sourceChain];
