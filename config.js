@@ -32,7 +32,7 @@ export const RPC_FALLBACKS = {
   ]
 };
 
-// Token Contracts (unchanged)
+// Token Contracts (UPDATED)
 export const TOKENS = {
   WETH: {
     SEPOLIA: '0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9',
@@ -40,11 +40,12 @@ export const TOKENS = {
   },
   USDC: {
     SEPOLIA: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238',
+    HOLESKY: '0x57978bfe465ad9b1c0bf80f6c1539d300705ea50',
     XION: 'xion1336jj8ertl8h7rdvnz4dh5rqahd09cy0x43guhsxx6xyrztx292qlzhdk9'
   }
 };
 
-// Bridge Contracts (unchanged - already corrected)
+// Bridge Contracts (unchanged)
 export const UNION_CONTRACT = {
   SEPOLIA: '0x5FbE74A283f7954f10AA04C2eDf55578811aeb03',
   HOLESKY: '0x2D1a8743a134126754b52Ee64843C37C133bA18a'
