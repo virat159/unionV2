@@ -7,15 +7,26 @@ const providerCache = new Map();
 const debugLog = (message, data = {}) => {
   const timestamp = new Date().toISOString();
   
-  // Custom JSON stringifier that handles BigInt
-  const replacer = (key, value) => {
-    if (typeof value === 'bigint') {
-      return value.toString(); // Convert BigInt to string
-    }
-    return value;
+  // Custom serializer that safely handles BigInt and circular references
+  const safeSerializer = (data) => {
+    const seen = new WeakSet();
+    return JSON.stringify(data, (key, value) => {
+      if (typeof value === 'bigint') {
+        return value.toString() + 'n'; // Append 'n' to indicate BigInt
+      }
+      if (typeof value === 'object' && value !== null) {
+        if (seen.has(value)) return '[Circular]';
+        seen.add(value);
+      }
+      return value;
+    }, 2);
   };
-  
-  console.log(`[${timestamp}] DEBUG: ${message}`, JSON.stringify(data, replacer, 2));
+
+  try {
+    console.log(`[${timestamp}] DEBUG: ${message}`, safeSerializer(data));
+  } catch (error) {
+    console.log(`[${timestamp}] DEBUG: ${message}`, '[Logging error: ' + error.message + ']');
+  }
 };
 
 export const getProvider = async (chainId) => {
@@ -45,7 +56,7 @@ export const getProvider = async (chainId) => {
                 
                 debugLog(`Connected to RPC`, { 
                   url, 
-                  blockNumber: blockNumber.toString() // Convert BigInt to string
+                  blockNumber: blockNumber.toString() 
                 });
                 providerCache.set(chainId, provider);
                 return provider;
@@ -83,10 +94,10 @@ const getGasParams = async () => {
         gasLimit: 500000
     };
     
-    debugLog("Gas parameters", {
-        maxFeeGwei: "10",
-        maxPriorityGwei: "9.5",
-        gasLimit: gasParams.gasLimit.toString()
+    debugLog("Gas parameters enforced", {
+        maxFeeGwei: ethers.formatUnits(gasParams.maxFeePerGas, "gwei"),
+        maxPriorityGwei: ethers.formatUnits(gasParams.maxPriorityFeePerGas, "gwei"),
+        gasLimit: gasParams.gasLimit
     });
     
     return gasParams;
@@ -100,7 +111,7 @@ const withRetry = async (fn, operation = 'operation', customDelay = null) => {
             if (delay > 0) {
                 debugLog(`Retry delay`, { 
                   operation, 
-                  delay: delay.toString() 
+                  delay 
                 });
                 await new Promise(resolve => setTimeout(resolve, delay));
             }
@@ -113,7 +124,7 @@ const withRetry = async (fn, operation = 'operation', customDelay = null) => {
             lastError = error;
             debugLog(`Attempt failed`, { 
                 operation,
-                attempt: (i+1).toString(),
+                attempt: i+1,
                 error: {
                     message: error.message,
                     code: error.code,
@@ -134,7 +145,7 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
                 sourceChain,
                 destChain,
                 asset,
-                amount: amount.toString() // Ensure amount is serializable
+                amount: amount.toString()
             });
 
             // Validate chains
@@ -199,31 +210,47 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
 
             // Check balance
             const balance = await withRetry(() => erc20.balanceOf(wallet.address), 'balanceOf()');
+            debugLog("Balance verification", {
+                balance: ethers.formatUnits(balance, decimals),
+                required: ethers.formatUnits(parsedAmount, decimals),
+                sufficient: balance >= parsedAmount
+            });
+
             if (balance < parsedAmount) {
                 throw new Error(`Insufficient balance. Need ${amount}, has ${ethers.formatUnits(balance, decimals)}`);
             }
 
             // Enhanced approval flow
             const allowance = await withRetry(() => erc20.allowance(wallet.address, safeBridgeAddress), 'allowance()');
+            debugLog("Allowance verification", {
+                current: ethers.formatUnits(allowance, decimals),
+                required: ethers.formatUnits(parsedAmount, decimals),
+                needsApproval: allowance < parsedAmount
+            });
+
             if (allowance < parsedAmount) {
-                debugLog("Initiating approval", {
-                    required: parsedAmount.toString(),
-                    current: allowance.toString()
+                debugLog("Initiating token approval", {
+                    spender: safeBridgeAddress,
+                    amount: ethers.formatUnits(parsedAmount * 2n, decimals)
                 });
                 
                 const approveTx = await withRetry(
                     () => erc20.approve(
                         safeBridgeAddress, 
-                        parsedAmount * 2n, // Approve 2x amount
+                        parsedAmount * 2n,
                         {
                             ...gasParams,
-                            gasLimit: 100000 // Higher gas for approvals
+                            gasLimit: 100000
                         }
                     ),
                     'approve()',
                     10000
                 );
                 
+                debugLog("Approval transaction sent", {
+                    hash: approveTx.hash,
+                    gasUsed: approveTx.gasLimit.toString()
+                });
                 await approveTx.wait(TRANSACTION_SETTINGS.blockConfirmation);
             }
 
@@ -233,6 +260,12 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
                 ['function depositERC20(address token, uint256 amount, uint16 destChainId)'],
                 wallet
             );
+
+            debugLog("Executing bridge transfer", {
+                token: tokenAddress,
+                amount: ethers.formatUnits(parsedAmount, decimals),
+                destinationChainId: CHAINS[destChain]
+            });
 
             const tx = await withRetry(
                 () => bridge.depositERC20(
@@ -244,6 +277,13 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
                 'depositERC20'
             );
 
+            debugLog("Bridge transaction submitted", {
+                hash: tx.hash,
+                gasLimit: tx.gasLimit.toString(),
+                maxFeePerGas: ethers.formatUnits(tx.maxFeePerGas, 'gwei'),
+                maxPriorityFeePerGas: ethers.formatUnits(tx.maxPriorityFeePerGas, 'gwei')
+            });
+
             await tx.wait(TRANSACTION_SETTINGS.blockConfirmation);
             return tx.hash;
 
@@ -252,9 +292,19 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
                 error: {
                     message: error.message,
                     code: error.code,
-                    data: error.data
+                    data: error.data,
+                    stack: error.stack
                 }
             });
+            
+            if (error.code === 'CALL_EXCEPTION') {
+                debugLog("Troubleshooting tips", [
+                    '1. Verify token approval completed successfully',
+                    '2. Check bridge contract status on Etherscan',
+                    '3. Confirm token contract is valid'
+                ]);
+            }
+            
             throw error;
         }
     }, 'sendToken');
