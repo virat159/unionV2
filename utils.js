@@ -1,5 +1,14 @@
 import { ethers } from 'ethers';
-import { CHAINS, RPC_URLS, RPC_FALLBACKS, UNION_CONTRACT, TOKENS, GAS_SETTINGS, RPC_TIMEOUTS, TRANSACTION_SETTINGS } from './config.js';
+import { 
+  CHAINS, 
+  RPC_URLS, 
+  RPC_FALLBACKS, 
+  UNION_CONTRACT, 
+  TOKENS, 
+  GAS_SETTINGS, 
+  RPC_TIMEOUTS, 
+  TRANSACTION_SETTINGS 
+} from './config.js';
 
 const providerCache = new Map();
 
@@ -58,14 +67,13 @@ export const getProvider = async (chainId) => {
           name: chainId.toLowerCase()
         });
 
-        // Fixed Promise.race syntax
+        // Test connection with timeout
         await Promise.race([
           provider.getBlockNumber(),
-          new Promise((_, reject) => {
-            setTimeout(() => {
-              reject(new Error(`RPC timeout after ${RPC_TIMEOUTS.request}ms`));
-            }, RPC_TIMEOUTS.request);
-          })
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error(`RPC timeout after ${RPC_TIMEOUTS.request}ms`)), 
+            RPC_TIMEOUTS.request
+          )
         ]);
 
         debugLog(`Connected to RPC`, { url, chainId });
@@ -91,34 +99,14 @@ const executeTransaction = async (contract, method, args, overrides, operationNa
     maxPriorityFeePerGas: ethers.formatUnits(txResponse.maxPriorityFeePerGas, 'gwei')
   });
 
-  let receipt;
-  const startTime = Date.now();
-  const timeout = 120000;
-  
-  while (!receipt && Date.now() - startTime < timeout) {
-    try {
-      receipt = await txResponse.wait(1);
-      debugLog("Transaction mined", {
-        status: receipt.status === 1 ? "success" : "failed",
-        confirmations: receipt.confirmations,
-        gasUsed: receipt.gasUsed.toString()
-      });
-      break;
-    } catch (error) {
-      if (Date.now() - startTime >= timeout) {
-        debugLog("Transaction timeout", {
-          hash: txResponse.hash,
-          elapsed: `${(Date.now() - startTime)/1000}s`
-        });
-        throw new Error(`Transaction ${operationName} timed out`);
-      }
-      await new Promise(resolve => setTimeout(resolve, 5000));
-    }
-  }
+  const receipt = await txResponse.wait();
+  debugLog("Transaction mined", {
+    status: receipt.status === 1 ? "success" : "failed",
+    confirmations: receipt.confirmations,
+    gasUsed: receipt.gasUsed.toString()
+  });
 
-  if (!receipt) throw new Error("Transaction receipt not received");
   if (receipt.status !== 1) throw new Error("Transaction failed on-chain");
-  
   return receipt;
 };
 
@@ -128,20 +116,25 @@ export const sendToken = async ({
   asset, 
   amount, 
   privateKey, 
-  gasSettings = {} 
+  gasSettings = {},
+  recipient = null
 }) => {
   try {
     debugLog("Starting bridge transfer", {
       sourceChain,
       destChain,
       asset,
-      amount: amount.toString()
+      amount: amount.toString(),
+      recipient
     });
 
+    // Validate configuration
     if (!CHAINS[sourceChain] || !CHAINS[destChain]) {
       throw new Error(`Invalid chain configuration: ${sourceChain} → ${destChain}`);
     }
-    if (!privateKey?.trim()) throw new Error('Invalid private key');
+    if (!privateKey?.match(/^0x[0-9a-fA-F]{64}$/)) {
+      throw new Error('Invalid private key format (must be 64 hex chars with 0x prefix)');
+    }
 
     const provider = await getProvider(sourceChain);
     const wallet = new ethers.Wallet(privateKey, provider);
@@ -150,21 +143,23 @@ export const sendToken = async ({
     
     if (!bridgeAddress) throw new Error(`Missing bridge address for ${sourceChain}`);
     
+    // Handle native token transfer
     const isNative = asset === 'native' || asset === 'NATIVE';
     const tokenAddress = isNative ? null : 
-      (asset === 'WETH' && sourceChain === 'SEPOLIA' ? TOKENS.WETH.SEPOLIA : asset);
+      (asset === 'WETH' ? TOKENS.WETH[sourceChain] : asset);
 
     if (isNative) {
       const bridge = new ethers.Contract(
         bridgeAddress,
-        ['function depositNative(uint16 destChainId) payable'],
+        ['function depositNative(uint16 destChainId, address recipient) payable'],
         wallet
       );
       
       const tx = await executeTransaction(
         bridge,
         'depositNative',
-        [CHAINS[destChain]],
+        [CHAINS[destChain], 
+        recipient || wallet.address,
         {
           value: ethers.parseEther(amount.toString()),
           ...gasParams
@@ -174,6 +169,7 @@ export const sendToken = async ({
       return tx.hash;
     }
 
+    // Handle ERC20 token transfer
     const erc20 = new ethers.Contract(
       tokenAddress,
       [
@@ -188,6 +184,7 @@ export const sendToken = async ({
     const decimals = await erc20.decimals().catch(() => 18);
     const parsedAmount = ethers.parseUnits(amount.toString(), decimals);
 
+    // Check balance
     const balance = await erc20.balanceOf(wallet.address);
     debugLog("Balance check", {
       balance: ethers.formatUnits(balance, decimals),
@@ -198,6 +195,7 @@ export const sendToken = async ({
       throw new Error(`Insufficient balance. Need ${amount}, has ${ethers.formatUnits(balance, decimals)}`);
     }
 
+    // Check and set approval if needed
     const allowance = await erc20.allowance(wallet.address, bridgeAddress);
     if (allowance < parsedAmount) {
       debugLog("Approving token transfer", {
@@ -208,7 +206,7 @@ export const sendToken = async ({
       await executeTransaction(
         erc20,
         'approve',
-        [bridgeAddress, parsedAmount * 2n],
+        [bridgeAddress, parsedAmount * 2n], // Approve double to prevent repeated approvals
         {
           ...gasParams,
           gasLimit: 100000
@@ -217,16 +215,22 @@ export const sendToken = async ({
       );
     }
 
+    // Execute bridge transfer
     const bridge = new ethers.Contract(
       bridgeAddress,
-      ['function depositERC20(address token, uint256 amount, uint16 destChainId)'],
+      ['function depositERC20(address token, uint256 amount, uint16 destChainId, address recipient)'],
       wallet
     );
 
     const tx = await executeTransaction(
       bridge,
       'depositERC20',
-      [tokenAddress, parsedAmount, CHAINS[destChain]],
+      [
+        tokenAddress, 
+        parsedAmount, 
+        CHAINS[destChain],
+        recipient || wallet.address
+      ],
       gasParams,
       'tokenBridgeTransfer'
     );
@@ -238,12 +242,13 @@ export const sendToken = async ({
       error: {
         message: error.message,
         code: error.code,
-        data: error.data
+        stack: error.stack
       },
       troubleshooting: [
         '1. Verify RPC endpoint is responsive',
         '2. Check token balance and approvals',
-        '3. Confirm bridge contract is operational'
+        '3. Confirm bridge contract is operational',
+        '4. Validate chain configurations'
       ]
     });
     throw error;
