@@ -67,13 +67,14 @@ export const getProvider = async (chainId) => {
           name: chainId.toLowerCase()
         });
 
-        // Test connection with timeout
+        // Fixed Promise.race syntax
         await Promise.race([
           provider.getBlockNumber(),
-          new Promise((_, reject) => 
-            setTimeout(() => reject(new Error(`RPC timeout after ${RPC_TIMEOUTS.request}ms`)), 
-            RPC_TIMEOUTS.request
-          )
+          new Promise((_, reject) => {
+            setTimeout(() => {
+              reject(new Error(`RPC timeout after ${RPC_TIMEOUTS.request}ms`));
+            }, RPC_TIMEOUTS.request);
+          })
         ]);
 
         debugLog(`Connected to RPC`, { url, chainId });
@@ -155,11 +156,11 @@ export const sendToken = async ({
         wallet
       );
       
+      // Fixed executeTransaction parameters
       const tx = await executeTransaction(
         bridge,
         'depositNative',
-        [CHAINS[destChain], 
-        recipient || wallet.address,
+        [CHAINS[destChain], recipient || wallet.address],
         {
           value: ethers.parseEther(amount.toString()),
           ...gasParams
@@ -206,7 +207,7 @@ export const sendToken = async ({
       await executeTransaction(
         erc20,
         'approve',
-        [bridgeAddress, parsedAmount * 2n], // Approve double to prevent repeated approvals
+        [bridgeAddress, parsedAmount * 2n],
         {
           ...gasParams,
           gasLimit: 100000
