@@ -20,7 +20,6 @@ export const getProvider = async (chainId) => {
                     }
                 );
 
-                // Enhanced connection test
                 await Promise.race([
                     provider.getBlockNumber(),
                     new Promise((_, reject) => 
@@ -54,37 +53,28 @@ const getSafeAddress = (address) => {
 };
 
 const getGasParams = async (provider) => {
-    // Updated minimum gas prices (3 Gwei max, 2.5 Gwei priority)
-    const MIN_BASE_FEE = ethers.parseUnits("3", "gwei");
-    const MIN_PRIORITY_FEE = ethers.parseUnits("2.5", "gwei");
+    // ENFORCE 10/9.5 GWEI MINIMUMS
+    const MIN_BASE_FEE = ethers.parseUnits("10", "gwei"); // Updated from 3
+    const MIN_PRIORITY_FEE = ethers.parseUnits("9.5", "gwei"); // Updated from 2.5
     
     try {
         const feeData = await provider.getFeeData();
         
-        // Use network fees if higher than minimums
-        const baseFee = (feeData.gasPrice || feeData.maxFeePerGas || MIN_BASE_FEE);
-        const priorityFee = (feeData.maxPriorityFeePerGas || MIN_PRIORITY_FEE);
-
-        // Ensure proper fee relationship with buffer
-        const maxPriorityFeePerGas = priorityFee > MIN_PRIORITY_FEE ? priorityFee : MIN_PRIORITY_FEE;
-        let maxFeePerGas = baseFee > MIN_BASE_FEE ? baseFee : MIN_BASE_FEE;
+        // Always use our minimums (override network suggestions)
+        const maxPriorityFeePerGas = MIN_PRIORITY_FEE;
+        const maxFeePerGas = MIN_BASE_FEE;
         
-        // Ensure maxFee >= priorityFee * 1.1
-        if (maxFeePerGas < (maxPriorityFeePerGas * 11n / 10n)) {
-            maxFeePerGas = (maxPriorityFeePerGas * 12n / 10n); // 20% buffer
-        }
-
         return {
             maxFeePerGas,
             maxPriorityFeePerGas,
-            gasLimit: GAS_SETTINGS.defaultGasLimit
+            gasLimit: GAS_SETTINGS.defaultGasLimit || 500000 // Use 500k if not set
         };
     } catch (error) {
-        console.warn('Using minimum gas prices due to error:', error.message);
+        console.warn('Using enforced gas prices:', error.message);
         return {
             maxFeePerGas: MIN_BASE_FEE,
             maxPriorityFeePerGas: MIN_PRIORITY_FEE,
-            gasLimit: GAS_SETTINGS.defaultGasLimit
+            gasLimit: 500000
         };
     }
 };
@@ -126,16 +116,19 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
             const provider = await getProvider(sourceChain);
             const wallet = new ethers.Wallet(privateKey, provider);
             
-            // Use provided gasSettings or calculate them
-            const gasParams = gasSettings || await getGasParams(provider);
+            // ENFORCE 10/9.5 GWEI HERE
+            const gasParams = {
+                maxFeePerGas: ethers.parseUnits("10", "gwei"),
+                maxPriorityFeePerGas: ethers.parseUnits("9.5", "gwei"),
+                gasLimit: 500000
+            };
 
-            console.log('Using gas parameters:', {
-                maxFeePerGas: ethers.formatUnits(gasParams.maxFeePerGas, 'gwei'),
-                maxPriorityFeePerGas: ethers.formatUnits(gasParams.maxPriorityFeePerGas, 'gwei'),
+            console.log('Enforced gas parameters:', {
+                maxFeePerGas: '10 Gwei',
+                maxPriorityFeePerGas: '9.5 Gwei',
                 gasLimit: gasParams.gasLimit
             });
 
-            // Get and validate bridge address
             const bridgeAddress = UNION_CONTRACT[sourceChain];
             if (!bridgeAddress || bridgeAddress.startsWith('0x000')) {
                 throw new Error(`Missing bridge address for ${sourceChain}`);
@@ -177,24 +170,21 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
                 wallet
             );
 
-            // Get token decimals with fallback
             const decimals = await withRetry(() => erc20.decimals().catch(() => 18), 'decimals()');
             const parsedAmount = ethers.parseUnits(amount.toString(), decimals);
 
-            // Check balance
             const balance = await withRetry(() => erc20.balanceOf(wallet.address), 'balanceOf()');
             if (balance < parsedAmount) {
                 throw new Error(`Insufficient balance. Need ${amount}, has ${ethers.formatUnits(balance, decimals)}`);
             }
 
-            // Check and approve if needed
             const allowance = await withRetry(() => erc20.allowance(wallet.address, safeBridgeAddress), 'allowance()');
             if (allowance < parsedAmount) {
                 console.log('⏳ Approving token transfer...');
                 const approveTx = await withRetry(
                     () => erc20.approve(safeBridgeAddress, ethers.MaxUint256, gasParams),
                     'approve()',
-                    10000 // Longer delay for approvals
+                    10000
                 );
                 await withRetry(
                     () => approveTx.wait(TRANSACTION_SETTINGS.blockConfirmation),
@@ -214,42 +204,21 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
                     tokenAddress,
                     parsedAmount,
                     CHAINS[destChain],
-                    {
-                        ...gasParams,
-                        gasLimit: 350000 // Increased gas limit for token transfers
-                    }
+                    gasParams // Using our enforced gas params
                 ),
                 'depositERC20'
             );
 
-            // Wait for confirmation with timeout
             await withRetry(
                 () => provider.waitForTransaction(tx.hash, TRANSACTION_SETTINGS.blockConfirmation),
                 'transaction confirmation',
-                15000 // Longer delay for tx confirmation
+                15000
             );
 
             return tx.hash;
 
         } catch (error) {
-            console.error('Transaction failed:', {
-                sourceChain,
-                destChain,
-                asset,
-                amount,
-                reason: error.reason || error.message,
-                code: error.code,
-                data: error.data
-            });
-            
-            // Provide specific troubleshooting tips
-            if (error.code === 'CALL_EXCEPTION') {
-                console.log('Troubleshooting tips:');
-                console.log('1. Verify the bridge contract is operational');
-                console.log('2. Check token approval status');
-                console.log('3. Try increasing gas parameters');
-            }
-            
+            console.error('Transaction failed:', error.message);
             throw error;
         }
     }, 'sendToken');
