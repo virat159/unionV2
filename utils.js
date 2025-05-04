@@ -117,7 +117,8 @@ export const sendToken = async ({
   amount, 
   privateKey, 
   gasSettings = {},
-  recipient = null
+  recipient = null,
+  referral = null // Added referral parameter as per Union's update
 }) => {
   try {
     debugLog("Starting bridge transfer", {
@@ -125,7 +126,8 @@ export const sendToken = async ({
       destChain,
       asset,
       amount: amount.toString(),
-      recipient
+      recipient,
+      referral
     });
 
     if (!CHAINS[sourceChain] || !CHAINS[destChain]) {
@@ -139,7 +141,6 @@ export const sendToken = async ({
     const wallet = new ethers.Wallet(privateKey, provider);
     const senderAddress = await wallet.getAddress();
     
-    // ✅ Fix: prevent ENS resolution
     const recipientAddress = recipient 
       ? ethers.getAddress(recipient) 
       : senderAddress;
@@ -149,29 +150,51 @@ export const sendToken = async ({
     if (!bridgeAddress) throw new Error(`Missing bridge address for ${sourceChain}`);
     
     const isNative = asset === 'native' || asset === 'NATIVE';
+    const isWETH = asset === 'WETH';
     const tokenAddress = isNative ? null : 
-      (asset === 'WETH' ? TOKENS.WETH[sourceChain] : asset);
+      (isWETH ? TOKENS.WETH[sourceChain] : asset);
 
     if (isNative) {
+      // Updated interface with referral support
       const bridge = new ethers.Contract(
         bridgeAddress,
-        ['function depositNative(uint16 destChainId, address recipient) payable'],
+        [
+          'function depositNative(uint16 destChainId, address recipient, address referral) payable',
+          'function depositNative(uint16 destChainId, address recipient) payable' // Fallback
+        ],
         wallet
       );
 
-      const tx = await executeTransaction(
-        bridge,
-        'depositNative',
-        [CHAINS[destChain], recipientAddress],
-        {
-          value: ethers.parseEther(amount.toString()),
-          ...gasParams
-        },
-        'nativeDeposit'
-      );
+      let tx;
+      try {
+        // Try with referral first
+        tx = await executeTransaction(
+          bridge,
+          'depositNative',
+          [CHAINS[destChain], recipientAddress, referral || ethers.ZeroAddress],
+          {
+            value: ethers.parseEther(amount.toString()),
+            ...gasParams
+          },
+          'nativeDeposit'
+        );
+      } catch {
+        // Fallback to non-referral version if failed
+        tx = await executeTransaction(
+          bridge,
+          'depositNative',
+          [CHAINS[destChain], recipientAddress],
+          {
+            value: ethers.parseEther(amount.toString()),
+            ...gasParams
+          },
+          'nativeDeposit'
+        );
+      }
       return tx.hash;
     }
 
+    // ERC20 Token Transfer (including WETH)
     const erc20 = new ethers.Contract(
       tokenAddress,
       [
@@ -186,53 +209,74 @@ export const sendToken = async ({
     const decimals = await erc20.decimals().catch(() => 18);
     const parsedAmount = ethers.parseUnits(amount.toString(), decimals);
 
+    // Check balance
     const balance = await erc20.balanceOf(senderAddress);
-    debugLog("Balance check", {
-      balance: ethers.formatUnits(balance, decimals),
-      required: amount,
-      sufficient: balance >= parsedAmount
-    });
     if (balance < parsedAmount) {
       throw new Error(`Insufficient balance. Need ${amount}, has ${ethers.formatUnits(balance, decimals)}`);
     }
 
+    // Handle approval
     const allowance = await erc20.allowance(senderAddress, bridgeAddress);
     if (allowance < parsedAmount) {
-      debugLog("Approving token transfer", {
-        required: ethers.formatUnits(parsedAmount, decimals),
-        currentAllowance: ethers.formatUnits(allowance, decimals)
-      });
-
       await executeTransaction(
         erc20,
         'approve',
         [bridgeAddress, parsedAmount * 2n],
         {
           ...gasParams,
-          gasLimit: 100000
+          gasLimit: isWETH ? 200000 : 100000 // Higher gas for WETH
         },
         'tokenApproval'
       );
     }
 
+    // Updated bridge interface with referral support
     const bridge = new ethers.Contract(
       bridgeAddress,
-      ['function depositERC20(address token, uint256 amount, uint16 destChainId, address recipient)'],
+      [
+        'function depositERC20(address token, uint256 amount, uint16 destChainId, address recipient, address referral)',
+        'function depositERC20(address token, uint256 amount, uint16 destChainId, address recipient)' // Fallback
+      ],
       wallet
     );
 
-    const tx = await executeTransaction(
-      bridge,
-      'depositERC20',
-      [
-        tokenAddress, 
-        parsedAmount, 
-        CHAINS[destChain],
-        recipientAddress
-      ],
-      gasParams,
-      'tokenBridgeTransfer'
-    );
+    let tx;
+    try {
+      // Try with referral first
+      tx = await executeTransaction(
+        bridge,
+        'depositERC20',
+        [
+          tokenAddress, 
+          parsedAmount, 
+          CHAINS[destChain],
+          recipientAddress,
+          referral || ethers.ZeroAddress
+        ],
+        {
+          ...gasParams,
+          gasLimit: isWETH ? 350000 : 300000 // Higher gas for WETH
+        },
+        'tokenBridgeTransfer'
+      );
+    } catch {
+      // Fallback to non-referral version
+      tx = await executeTransaction(
+        bridge,
+        'depositERC20',
+        [
+          tokenAddress, 
+          parsedAmount, 
+          CHAINS[destChain],
+          recipientAddress
+        ],
+        {
+          ...gasParams,
+          gasLimit: isWETH ? 350000 : 300000
+        },
+        'tokenBridgeTransfer'
+      );
+    }
 
     return tx.hash;
 
@@ -247,7 +291,8 @@ export const sendToken = async ({
         '1. Verify RPC endpoint is responsive',
         '2. Check token balance and approvals',
         '3. Confirm bridge contract is operational',
-        '4. Validate chain configurations'
+        '4. Validate chain configurations',
+        '5. Check for contract updates from Union Build'
       ]
     });
     throw error;
