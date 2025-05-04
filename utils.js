@@ -58,11 +58,14 @@ export const getProvider = async (chainId) => {
           name: chainId.toLowerCase()
         });
 
+        // Fixed Promise.race syntax
         await Promise.race([
           provider.getBlockNumber(),
-          new Promise((_, reject) => 
-            setTimeout(() => reject(new Error(`RPC timeout after ${RPC_TIMEOUTS.request}ms`)), 
-            RPC_TIMEOUTS.request)
+          new Promise((_, reject) => {
+            setTimeout(() => {
+              reject(new Error(`RPC timeout after ${RPC_TIMEOUTS.request}ms`));
+            }, RPC_TIMEOUTS.request);
+          })
         ]);
 
         debugLog(`Connected to RPC`, { url, chainId });
