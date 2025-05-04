@@ -67,7 +67,6 @@ export const getProvider = async (chainId) => {
           name: chainId.toLowerCase()
         });
 
-        // Fixed Promise.race syntax
         await Promise.race([
           provider.getBlockNumber(),
           new Promise((_, reject) => {
@@ -129,7 +128,6 @@ export const sendToken = async ({
       recipient
     });
 
-    // Validate configuration
     if (!CHAINS[sourceChain] || !CHAINS[destChain]) {
       throw new Error(`Invalid chain configuration: ${sourceChain} → ${destChain}`);
     }
@@ -139,12 +137,13 @@ export const sendToken = async ({
 
     const provider = await getProvider(sourceChain);
     const wallet = new ethers.Wallet(privateKey, provider);
+    const senderAddress = await wallet.getAddress();
+    const recipientAddress = recipient ?? senderAddress;
     const gasParams = await getGasParams(provider, gasSettings);
     const bridgeAddress = UNION_CONTRACT[sourceChain];
-    
+
     if (!bridgeAddress) throw new Error(`Missing bridge address for ${sourceChain}`);
     
-    // Handle native token transfer
     const isNative = asset === 'native' || asset === 'NATIVE';
     const tokenAddress = isNative ? null : 
       (asset === 'WETH' ? TOKENS.WETH[sourceChain] : asset);
@@ -155,12 +154,11 @@ export const sendToken = async ({
         ['function depositNative(uint16 destChainId, address recipient) payable'],
         wallet
       );
-      
-      // Fixed executeTransaction parameters
+
       const tx = await executeTransaction(
         bridge,
         'depositNative',
-        [CHAINS[destChain], recipient || wallet.address],
+        [CHAINS[destChain], recipientAddress],
         {
           value: ethers.parseEther(amount.toString()),
           ...gasParams
@@ -170,7 +168,6 @@ export const sendToken = async ({
       return tx.hash;
     }
 
-    // Handle ERC20 token transfer
     const erc20 = new ethers.Contract(
       tokenAddress,
       [
@@ -185,8 +182,7 @@ export const sendToken = async ({
     const decimals = await erc20.decimals().catch(() => 18);
     const parsedAmount = ethers.parseUnits(amount.toString(), decimals);
 
-    // Check balance
-    const balance = await erc20.balanceOf(wallet.address);
+    const balance = await erc20.balanceOf(senderAddress);
     debugLog("Balance check", {
       balance: ethers.formatUnits(balance, decimals),
       required: amount,
@@ -196,8 +192,7 @@ export const sendToken = async ({
       throw new Error(`Insufficient balance. Need ${amount}, has ${ethers.formatUnits(balance, decimals)}`);
     }
 
-    // Check and set approval if needed
-    const allowance = await erc20.allowance(wallet.address, bridgeAddress);
+    const allowance = await erc20.allowance(senderAddress, bridgeAddress);
     if (allowance < parsedAmount) {
       debugLog("Approving token transfer", {
         required: ethers.formatUnits(parsedAmount, decimals),
@@ -216,7 +211,6 @@ export const sendToken = async ({
       );
     }
 
-    // Execute bridge transfer
     const bridge = new ethers.Contract(
       bridgeAddress,
       ['function depositERC20(address token, uint256 amount, uint16 destChainId, address recipient)'],
@@ -230,7 +224,7 @@ export const sendToken = async ({
         tokenAddress, 
         parsedAmount, 
         CHAINS[destChain],
-        recipient || wallet.address
+        recipientAddress
       ],
       gasParams,
       'tokenBridgeTransfer'
