@@ -66,7 +66,7 @@ const transferWETH = async () => {
     // Dynamic amount input
     const amountInput = prompt('Enter WETH amount to bridge (default: 0.0001): ') || '0.0001';
     const amount = parseFloat(amountInput);
-    if (isNaN(amount) throw new Error('Invalid amount');
+    if (isNaN(amount)) throw new Error('Invalid amount');
 
     // ========== Pre-Flight Checks ==========
     console.log(chalk.yellow('\n🔍 Running pre-flight checks...'));
