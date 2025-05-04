@@ -20,7 +20,7 @@ const transferWETH = async () => {
     console.log(chalk.yellow('\n⏳ Checking bridge status...'));
     console.log(chalk.gray(`Bridge Address: ${UNION_CONTRACT.SEPOLIA}`));
 
-    // Enhanced transaction parameters
+    // Enhanced transaction parameters with higher gas settings
     const txParams = {
       sourceChain: 'SEPOLIA',
       destChain: 'HOLESKY',
@@ -28,30 +28,77 @@ const transferWETH = async () => {
       amount: amount,
       privateKey: privateKey.trim(),
       gasSettings: {
-        maxFeePerGas: ethers.parseUnits("3", "gwei"),  // Increased from 2.5
-        maxPriorityFeePerGas: ethers.parseUnits("2.5", "gwei"), // Increased from 2
-        gasLimit: 350000  // Increased from 250000
+        maxFeePerGas: ethers.parseUnits("20", "gwei"),  // Increased significantly
+        maxPriorityFeePerGas: ethers.parseUnits("15", "gwei"), // Increased significantly
+        gasLimit: 500000  // Increased from 350000
       }
     };
 
     console.log(chalk.yellow('\n⏳ Initiating bridge transfer...'));
     console.log(chalk.gray(`- Amount: ${amount} WETH`));
     
-    // Log gas parameters before sending
+    // Enhanced gas parameters logging
     console.log(chalk.gray('- Gas Parameters:'));
     console.log(chalk.gray(`  Max Fee: ${ethers.formatUnits(txParams.gasSettings.maxFeePerGas, "gwei")} Gwei`));
     console.log(chalk.gray(`  Priority Fee: ${ethers.formatUnits(txParams.gasSettings.maxPriorityFeePerGas, "gwei")} Gwei`));
     console.log(chalk.gray(`  Gas Limit: ${txParams.gasSettings.gasLimit.toString()}`));
 
-    const txHash = await sendToken(txParams);
+    // Add retry logic for the transaction
+    let txHash;
+    let attempts = 0;
+    const maxAttempts = 3;
+    
+    while (attempts < maxAttempts) {
+      try {
+        attempts++;
+        console.log(chalk.yellow(`\n⏳ Attempt ${attempts}/${maxAttempts}`));
+        txHash = await sendToken(txParams);
+        break;
+      } catch (error) {
+        if (attempts === maxAttempts) throw error;
+        console.log(chalk.yellow(`⚠️ Attempt failed, retrying... (${error.message})`));
+        // Exponential backoff
+        await new Promise(resolve => setTimeout(resolve, 2000 * attempts));
+      }
+    }
 
     console.log(chalk.green(`
-    ✅ Successfully bridged ${amount} WETH!
+    ✅ Transaction submitted successfully!
     Transaction Hash: ${chalk.underline(`https://sepolia.etherscan.io/tx/${txHash}`)}
     `));
     
     console.log(chalk.yellow('\n⏳ Waiting for completion on Holesky...'));
     console.log(chalk.gray('This may take 2-5 minutes...'));
+
+    // Add receipt polling with timeout
+    const provider = new ethers.JsonRpcProvider(CHAINS.SEPOLIA.rpcUrl);
+    let receipt;
+    const startTime = Date.now();
+    const timeout = 120000; // 2 minutes timeout
+    
+    while (!receipt && Date.now() - startTime < timeout) {
+      try {
+        receipt = await provider.getTransactionReceipt(txHash);
+        if (!receipt) {
+          await new Promise(resolve => setTimeout(resolve, 5000)); // Check every 5 seconds
+          continue;
+        }
+        
+        if (receipt.status === 1) {
+          console.log(chalk.green('\n🎉 Bridge transfer completed successfully!'));
+        } else {
+          console.log(chalk.red('\n❌ Transaction failed on-chain'));
+        }
+        break;
+      } catch (error) {
+        if (Date.now() - startTime >= timeout) {
+          console.log(chalk.yellow('\n⚠️ Timeout waiting for receipt, but transaction may still succeed'));
+          console.log(chalk.blue(`Please check manually later: https://sepolia.etherscan.io/tx/${txHash}`));
+          break;
+        }
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      }
+    }
 
   } catch (error) {
     console.error(chalk.red('\n❌ Bridge failed:'));
@@ -65,6 +112,11 @@ const transferWETH = async () => {
     } else if (error.message.includes('insufficient funds')) {
       console.log(chalk.yellow('\n💡 Get Sepolia ETH from a faucet:'));
       console.log(chalk.blue('https://sepoliafaucet.com'));
+    } else if (error.message.includes('timed out')) {
+      console.log(chalk.yellow('\n💡 Network congestion detected:'));
+      console.log(chalk.blue('1. Try again later'));
+      console.log(chalk.blue('2. Check your transaction on Etherscan'));
+      console.log(chalk.blue('3. Consider using a different RPC endpoint'));
     }
     
     process.exit(1);
