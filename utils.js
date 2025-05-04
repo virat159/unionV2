@@ -138,10 +138,14 @@ export const sendToken = async ({
     const provider = await getProvider(sourceChain);
     const wallet = new ethers.Wallet(privateKey, provider);
     const senderAddress = await wallet.getAddress();
-    const recipientAddress = recipient ?? senderAddress;
+    
+    // ✅ Fix: prevent ENS resolution
+    const recipientAddress = recipient 
+      ? ethers.getAddress(recipient) 
+      : senderAddress;
+
     const gasParams = await getGasParams(provider, gasSettings);
     const bridgeAddress = UNION_CONTRACT[sourceChain];
-
     if (!bridgeAddress) throw new Error(`Missing bridge address for ${sourceChain}`);
     
     const isNative = asset === 'native' || asset === 'NATIVE';
