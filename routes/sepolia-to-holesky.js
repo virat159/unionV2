@@ -36,9 +36,12 @@ const transferWETH = async () => {
 
     console.log(chalk.yellow('\n⏳ Initiating bridge transfer...'));
     console.log(chalk.gray(`- Amount: ${amount} WETH`));
-    console.log(chalk.gray(`- Max Fee: 3 Gwei`));
-    console.log(chalk.gray(`- Priority Fee: 2.5 Gwei`));
-    console.log(chalk.gray(`- Gas Limit: 350000`));
+    
+    // Log gas parameters before sending
+    console.log(chalk.gray('- Gas Parameters:'));
+    console.log(chalk.gray(`  Max Fee: ${ethers.formatUnits(txParams.gasSettings.maxFeePerGas, "gwei")} Gwei`));
+    console.log(chalk.gray(`  Priority Fee: ${ethers.formatUnits(txParams.gasSettings.maxPriorityFeePerGas, "gwei")} Gwei`));
+    console.log(chalk.gray(`  Gas Limit: ${txParams.gasSettings.gasLimit.toString()}`));
 
     const txHash = await sendToken(txParams);
 
