@@ -3,7 +3,7 @@ import { CHAINS, RPC_URLS, RPC_FALLBACKS, UNION_CONTRACT, TOKENS, GAS_SETTINGS, 
 
 const providerCache = new Map();
 
-// Debug logger
+// Enhanced debug logger
 const debugLog = (message, data = {}) => {
   const timestamp = new Date().toISOString();
   console.log(`[${timestamp}] DEBUG: ${message}`, JSON.stringify(data, null, 2));
@@ -27,7 +27,6 @@ export const getProvider = async (chainId) => {
                     }
                 );
 
-                // Enhanced connection test
                 const blockNumber = await Promise.race([
                     provider.getBlockNumber(),
                     new Promise((_, reject) => 
@@ -35,11 +34,11 @@ export const getProvider = async (chainId) => {
                     )
                 ]);
                 
-                debugLog(`Connected to ${url}`, { blockNumber });
+                debugLog(`Connected to RPC`, { url, blockNumber });
                 providerCache.set(chainId, provider);
                 return provider;
             } catch (error) {
-                debugLog(`RPC endpoint failed (${url})`, { error: error.message });
+                debugLog(`RPC endpoint failed`, { url, error: error.message });
                 continue;
             }
         }
@@ -56,26 +55,18 @@ const getSafeAddress = (address) => {
         try {
             return ethers.getAddress(address.toLowerCase());
         } catch {
-            return address; // For non-EVM addresses
+            return address;
         }
     }
 };
 
-const getGasParams = async (provider) => {
-    // ENFORCE 10/9.5 GWEI MINIMUMS
-    const gasParams = {
+const getGasParams = async () => {
+    // Strict 10/9.5 Gwei enforcement
+    return {
         maxFeePerGas: ethers.parseUnits("10", "gwei"),
         maxPriorityFeePerGas: ethers.parseUnits("9.5", "gwei"),
         gasLimit: 500000
     };
-    
-    debugLog("Enforced gas parameters", {
-        maxFeeGwei: "10",
-        maxPriorityGwei: "9.5",
-        gasLimit: gasParams.gasLimit
-    });
-    
-    return gasParams;
 };
 
 const withRetry = async (fn, operation = 'operation', customDelay = null) => {
@@ -84,24 +75,25 @@ const withRetry = async (fn, operation = 'operation', customDelay = null) => {
         try {
             const delay = i > 0 ? (customDelay || GAS_SETTINGS.retryDelay) : 0;
             if (delay > 0) {
-                debugLog(`Waiting ${delay}ms before retry...`);
+                debugLog(`Retry delay`, { operation, delay });
                 await new Promise(resolve => setTimeout(resolve, delay));
             }
             
-            debugLog(`Attempt ${i+1}/${TRANSACTION_SETTINGS.maxRetries} for ${operation}`);
+            debugLog(`Attempt ${i+1}/${TRANSACTION_SETTINGS.maxRetries}`, { operation });
             return await fn();
         } catch (error) {
             lastError = error;
-            debugLog(`Attempt ${i+1} failed`, { 
+            debugLog(`Attempt failed`, { 
                 operation,
-                error: error.message,
-                code: error.code,
-                data: error.data 
+                attempt: i+1,
+                error: {
+                    message: error.message,
+                    code: error.code,
+                    data: error.data
+                }
             });
             
-            if (i < TRANSACTION_SETTINGS.maxRetries - 1) {
-                continue;
-            }
+            if (i < TRANSACTION_SETTINGS.maxRetries - 1) continue;
             throw lastError;
         }
     }
@@ -117,11 +109,11 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
                 amount
             });
 
-            // Validate input parameters
+            // Validate chains
             if (!CHAINS[sourceChain] || !CHAINS[destChain]) {
                 throw new Error(`Invalid chain: ${sourceChain} → ${destChain}`);
             }
-            if (!privateKey || !privateKey.trim()) {
+            if (!privateKey?.trim()) {
                 throw new Error('Invalid private key');
             }
 
@@ -129,15 +121,17 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
             const wallet = new ethers.Wallet(privateKey, provider);
             
             // Get enforced gas parameters
-            const gasParams = await getGasParams(provider);
+            const gasParams = await getGasParams();
+            debugLog("Gas parameters enforced", gasParams);
 
+            // Verify bridge contract
             const bridgeAddress = UNION_CONTRACT[sourceChain];
             if (!bridgeAddress || bridgeAddress.startsWith('0x000')) {
                 throw new Error(`Missing bridge address for ${sourceChain}`);
             }
             const safeBridgeAddress = getSafeAddress(bridgeAddress);
 
-            // Verify bridge contract
+            // Check contract deployment
             const bridgeCode = await provider.getCode(safeBridgeAddress);
             if (bridgeCode === '0x') {
                 throw new Error(`Bridge contract not deployed at ${safeBridgeAddress}`);
@@ -161,17 +155,16 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
                     }
                 );
                 
-                debugLog("Native ETH transfer initiated", { txHash: tx.hash });
+                debugLog("Native transfer initiated", { txHash: tx.hash });
                 return tx.hash;
             }
 
-            // Handle ERC20 token transfers
+            // Handle ERC20 (WETH) transfers
             const tokenAddress = asset === 'WETH' && sourceChain === 'SEPOLIA' 
-                ? '0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9'
+                ? TOKENS.WETH.SEPOLIA
                 : getSafeAddress(asset);
 
-            debugLog("Using token address", { tokenAddress });
-
+            debugLog("Using token contract", { tokenAddress });
             const erc20 = new ethers.Contract(
                 tokenAddress,
                 [
@@ -186,55 +179,69 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
             // Get token decimals with fallback
             const decimals = await withRetry(() => erc20.decimals().catch(() => 18), 'decimals()');
             const parsedAmount = ethers.parseUnits(amount.toString(), decimals);
-
-            debugLog("Token amount parsed", { 
-                inputAmount: amount,
-                parsedAmount: parsedAmount.toString(),
-                decimals
-            });
+            debugLog("Amount parsed", { input: amount, parsed: parsedAmount.toString(), decimals });
 
             // Check balance
             const balance = await withRetry(() => erc20.balanceOf(wallet.address), 'balanceOf()');
-            debugLog("Wallet balance check", {
+            debugLog("Balance check", { 
                 balance: ethers.formatUnits(balance, decimals),
-                required: amount
+                required: amount 
             });
 
             if (balance < parsedAmount) {
                 throw new Error(`Insufficient balance. Need ${amount}, has ${ethers.formatUnits(balance, decimals)}`);
             }
 
-            // Check and approve if needed
+            // Enhanced approval flow
             const allowance = await withRetry(() => erc20.allowance(wallet.address, safeBridgeAddress), 'allowance()');
             debugLog("Allowance check", {
-                currentAllowance: ethers.formatUnits(allowance, decimals),
-                required: amount
+                current: ethers.formatUnits(allowance, decimals),
+                required: ethers.formatUnits(parsedAmount, decimals)
             });
 
             if (allowance < parsedAmount) {
-                debugLog("Initiating token approval");
+                debugLog("Initiating approval");
+                const approvalAmount = parsedAmount * 2n; // Approve 2x required amount
+                
                 const approveTx = await withRetry(
-                    () => erc20.approve(safeBridgeAddress, ethers.MaxUint256, gasParams),
+                    () => erc20.approve(
+                        safeBridgeAddress, 
+                        approvalAmount, 
+                        {
+                            ...gasParams,
+                            gasLimit: 100000 // Higher gas for approvals
+                        }
+                    ),
                     'approve()',
                     10000
                 );
                 
-                debugLog("Approval transaction sent", { txHash: approveTx.hash });
-                
-                await withRetry(
-                    () => approveTx.wait(TRANSACTION_SETTINGS.blockConfirmation),
-                    'approve confirmation'
-                );
-                
+                debugLog("Approval sent", { txHash: approveTx.hash });
+                await approveTx.wait(TRANSACTION_SETTINGS.blockConfirmation);
                 debugLog("Approval confirmed");
             }
 
+            // Execute bridge transfer
             debugLog(`Initiating bridge to ${destChain}`);
             const bridge = new ethers.Contract(
                 safeBridgeAddress,
                 ['function depositERC20(address token, uint256 amount, uint16 destChainId)'],
                 wallet
             );
+
+            // Pre-flight simulation
+            try {
+                await bridge.callStatic.depositERC20(
+                    tokenAddress,
+                    parsedAmount,
+                    CHAINS[destChain],
+                    gasParams
+                );
+                debugLog("Simulation successful");
+            } catch (simError) {
+                debugLog("Simulation failed", { error: simError.message });
+                throw simError;
+            }
 
             const tx = await withRetry(
                 () => bridge.depositERC20(
@@ -246,31 +253,28 @@ export const sendToken = async ({ sourceChain, destChain, asset, amount, private
                 'depositERC20'
             );
 
-            debugLog("Bridge transaction initiated", { txHash: tx.hash });
-
-            await withRetry(
-                () => provider.waitForTransaction(tx.hash, TRANSACTION_SETTINGS.blockConfirmation),
-                'transaction confirmation',
-                15000
-            );
-
+            debugLog("Bridge transaction sent", { txHash: tx.hash });
+            await tx.wait(TRANSACTION_SETTINGS.blockConfirmation);
             debugLog("Bridge transaction confirmed");
+
             return tx.hash;
 
         } catch (error) {
             debugLog("Transaction failed", {
-                error: error.message,
-                stack: error.stack,
-                code: error.code,
-                data: error.data
+                error: {
+                    message: error.message,
+                    code: error.code,
+                    data: error.data,
+                    stack: error.stack
+                }
             });
             
-            // Provide specific troubleshooting tips
+            // Specific error handling
             if (error.code === 'CALL_EXCEPTION') {
                 debugLog("Troubleshooting tips", [
-                    '1. Verify the bridge contract is operational',
-                    '2. Check token approval status',
-                    '3. Confirm contract addresses are correct'
+                    '1. Verify token approval completed successfully',
+                    '2. Check bridge contract status on Etherscan',
+                    '3. Confirm token contract is valid'
                 ]);
             }
             
