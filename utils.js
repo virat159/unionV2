@@ -3,26 +3,19 @@ import { CHAINS, RPC_URLS, RPC_FALLBACKS, UNION_CONTRACT, TOKENS, GAS_SETTINGS, 
 
 const providerCache = new Map();
 
-// Enhanced debug logger with transaction tracing
 const debugLog = (message, data = {}) => {
   const timestamp = new Date().toISOString();
   const safeData = {
     ...data,
-    // Convert BigInt to string for safe logging
     ...(data.value ? { value: data.value.toString() } : {}),
     ...(data.amount ? { amount: data.amount.toString() } : {})
   };
-  
   console.log(`[${timestamp}] DEBUG: ${message}`, JSON.stringify(safeData, null, 2));
 };
 
-// Get dynamic gas parameters based on network conditions
 const getGasParams = async (provider, overrideSettings = {}) => {
   try {
-    // Get current network conditions
     const feeData = await provider.getFeeData();
-    
-    // Calculate dynamic gas parameters (25% buffer over current network conditions)
     const calculatedParams = {
       maxFeePerGas: overrideSettings.maxFeePerGas || 
                    (feeData.maxFeePerGas * 125n / 100n) || 
@@ -50,13 +43,12 @@ const getGasParams = async (provider, overrideSettings = {}) => {
   }
 };
 
-// Enhanced provider with failover support
 export const getProvider = async (chainId) => {
   if (!providerCache.has(chainId)) {
     const endpoints = [
       RPC_URLS[chainId],
       ...(RPC_FALLBACKS[chainId] || []),
-      'https://ethereum-sepolia.publicnode.com' // Global fallback
+      'https://ethereum-sepolia.publicnode.com'
     ].filter(Boolean);
 
     for (const url of endpoints) {
@@ -66,7 +58,6 @@ export const getProvider = async (chainId) => {
           name: chainId.toLowerCase()
         });
 
-        // Verify connection
         await Promise.race([
           provider.getBlockNumber(),
           new Promise((_, reject) => 
@@ -74,17 +65,11 @@ export const getProvider = async (chainId) => {
             RPC_TIMEOUTS.request)
         ]);
 
-        debugLog(`Connected to RPC`, { 
-          url, 
-          chainId 
-        });
+        debugLog(`Connected to RPC`, { url, chainId });
         providerCache.set(chainId, provider);
         return provider;
       } catch (error) {
-        debugLog(`RPC endpoint failed`, { 
-          url, 
-          error: error.message 
-        });
+        debugLog(`RPC endpoint failed`, { url, error: error.message });
         continue;
       }
     }
@@ -93,7 +78,6 @@ export const getProvider = async (chainId) => {
   return providerCache.get(chainId);
 };
 
-// Transaction execution with enhanced monitoring
 const executeTransaction = async (contract, method, args, overrides, operationName) => {
   const txResponse = await contract[method](...args, overrides);
   debugLog("Transaction submitted", {
@@ -104,14 +88,13 @@ const executeTransaction = async (contract, method, args, overrides, operationNa
     maxPriorityFeePerGas: ethers.formatUnits(txResponse.maxPriorityFeePerGas, 'gwei')
   });
 
-  // Enhanced receipt waiting with progress updates
   let receipt;
   const startTime = Date.now();
-  const timeout = 120000; // 2 minutes
+  const timeout = 120000;
   
   while (!receipt && Date.now() - startTime < timeout) {
     try {
-      receipt = await txResponse.wait(1); // Wait for 1 confirmation
+      receipt = await txResponse.wait(1);
       debugLog("Transaction mined", {
         status: receipt.status === 1 ? "success" : "failed",
         confirmations: receipt.confirmations,
@@ -136,7 +119,6 @@ const executeTransaction = async (contract, method, args, overrides, operationNa
   return receipt;
 };
 
-// Main token transfer function
 export const sendToken = async ({ 
   sourceChain, 
   destChain, 
@@ -153,28 +135,22 @@ export const sendToken = async ({
       amount: amount.toString()
     });
 
-    // Validate input parameters
     if (!CHAINS[sourceChain] || !CHAINS[destChain]) {
       throw new Error(`Invalid chain configuration: ${sourceChain} → ${destChain}`);
     }
     if (!privateKey?.trim()) throw new Error('Invalid private key');
 
-    // Initialize provider and wallet
     const provider = await getProvider(sourceChain);
     const wallet = new ethers.Wallet(privateKey, provider);
-
-    // Get dynamic gas parameters
     const gasParams = await getGasParams(provider, gasSettings);
-
-    // Prepare bridge contract
     const bridgeAddress = UNION_CONTRACT[sourceChain];
+    
     if (!bridgeAddress) throw new Error(`Missing bridge address for ${sourceChain}`);
     
     const isNative = asset === 'native' || asset === 'NATIVE';
     const tokenAddress = isNative ? null : 
       (asset === 'WETH' && sourceChain === 'SEPOLIA' ? TOKENS.WETH.SEPOLIA : asset);
 
-    // Handle native ETH transfer
     if (isNative) {
       const bridge = new ethers.Contract(
         bridgeAddress,
@@ -195,7 +171,6 @@ export const sendToken = async ({
       return tx.hash;
     }
 
-    // Handle ERC20 token transfer
     const erc20 = new ethers.Contract(
       tokenAddress,
       [
@@ -207,11 +182,9 @@ export const sendToken = async ({
       wallet
     );
 
-    // Get token details
     const decimals = await erc20.decimals().catch(() => 18);
     const parsedAmount = ethers.parseUnits(amount.toString(), decimals);
 
-    // Verify balance
     const balance = await erc20.balanceOf(wallet.address);
     debugLog("Balance check", {
       balance: ethers.formatUnits(balance, decimals),
@@ -222,7 +195,6 @@ export const sendToken = async ({
       throw new Error(`Insufficient balance. Need ${amount}, has ${ethers.formatUnits(balance, decimals)}`);
     }
 
-    // Check and update allowance if needed
     const allowance = await erc20.allowance(wallet.address, bridgeAddress);
     if (allowance < parsedAmount) {
       debugLog("Approving token transfer", {
@@ -233,16 +205,15 @@ export const sendToken = async ({
       await executeTransaction(
         erc20,
         'approve',
-        [bridgeAddress, parsedAmount * 2n], // Approve double the amount for safety
+        [bridgeAddress, parsedAmount * 2n],
         {
           ...gasParams,
-          gasLimit: 100000 // Fixed gas limit for approvals
+          gasLimit: 100000
         },
         'tokenApproval'
       );
     }
 
-    // Execute bridge transfer
     const bridge = new ethers.Contract(
       bridgeAddress,
       ['function depositERC20(address token, uint256 amount, uint16 destChainId)'],
